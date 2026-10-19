@@ -43,10 +43,18 @@ pub(super) fn capture_region(
     validate_recording_fps(settings.frames_per_second)?;
     sharer::validate_recording_seconds(settings.max_seconds)?;
 
-    let capturer = RegionCapturer::new(region, settings.capture_resolution)?;
+    let capturer = RegionCapturer::new_for_recording(region, settings.capture_resolution)?;
     let output = tempfile::tempfile().context("failed to create a temporary recording file")?;
     let writer = WebpWriter::new(output, capturer.dimensions(), MAX_RECORDING_BYTES)?;
-    let animation = record_frames(writer, stop, settings, now, || capturer.capture_rgba())?;
+    let animation = record_frames(
+        writer,
+        stop,
+        settings,
+        RecordingCallbacks {
+            now,
+            capture: || capturer.capture_rgba(),
+        },
+    )?;
     let warning = animation
         .stopped_at_limit
         .then(|| "recording stopped at the 256 MiB file limit".to_owned());
@@ -68,13 +76,26 @@ struct RecordedAnimation<W> {
     stopped_at_limit: bool,
 }
 
-fn record_frames<W: Write + Seek>(
+struct RecordingCallbacks<N, C> {
+    now: N,
+    capture: C,
+}
+
+fn record_frames<W, N, C>(
     mut writer: WebpWriter<W>,
     stop: &Receiver<()>,
     settings: RecordingSettings,
-    mut now: impl FnMut() -> Instant,
-    mut capture: impl FnMut() -> Result<Vec<u8>>,
-) -> Result<RecordedAnimation<W>> {
+    callbacks: RecordingCallbacks<N, C>,
+) -> Result<RecordedAnimation<W>>
+where
+    W: Write + Seek,
+    N: FnMut() -> Instant,
+    C: FnMut() -> Result<Vec<u8>>,
+{
+    let RecordingCallbacks {
+        mut now,
+        mut capture,
+    } = callbacks;
     let RecordingSettings {
         frames_per_second,
         max_seconds,

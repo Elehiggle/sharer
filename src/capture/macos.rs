@@ -106,8 +106,45 @@ pub struct RegionCapturer {
 }
 
 impl RegionCapturer {
-    /// Start a bounded ScreenCaptureKit stream for the selected region.
+    /// Start a ScreenCaptureKit stream for the selected region.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the region does not fit a display or the stream cannot start.
     pub fn new(region: DesktopRegion, capture_resolution: CaptureResolution) -> Result<Self> {
+        Self::start(region, capture_resolution, |_| Ok(()))
+    }
+
+    /// Start a recording stream, checking physical dimensions before allocating frames.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the physical frame exceeds the recording limit or capture fails.
+    pub fn new_for_recording(
+        region: DesktopRegion,
+        capture_resolution: CaptureResolution,
+    ) -> Result<Self> {
+        Self::start(region, capture_resolution, |dimensions| {
+            recording_frame_bytes(dimensions).map(|_| ())
+        })
+    }
+
+    /// Return the newest available stream frame as tightly packed RGBA pixels.
+    pub fn capture_rgba(&self) -> Result<Vec<u8>> {
+        sample_buffer_rgba(self.mailbox.next_frame()?, self.width, self.height)
+    }
+
+    /// Return the physical pixel dimensions emitted by this capture source.
+    #[must_use]
+    pub const fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn start(
+        region: DesktopRegion,
+        capture_resolution: CaptureResolution,
+        validate_dimensions: fn((u32, u32)) -> Result<()>,
+    ) -> Result<Self> {
         let prepared = prepare_display_containing(region)?;
         let (width, height) = match capture_resolution {
             CaptureResolution::Native => (
@@ -125,7 +162,8 @@ impl RegionCapturer {
 
             CaptureResolution::Logical => (region.width(), region.height()),
         };
-        recording_frame_bytes((width, height))?;
+
+        validate_dimensions((width, height))?;
         let local_x = region.x().saturating_sub(prepared.desktop_bounds.x);
         let local_y = region.y().saturating_sub(prepared.desktop_bounds.y);
         let source_rect = CGRect::new(
@@ -174,17 +212,6 @@ impl RegionCapturer {
             width,
             height,
         })
-    }
-
-    /// Return the newest available stream frame as tightly packed RGBA pixels.
-    pub fn capture_rgba(&self) -> Result<Vec<u8>> {
-        sample_buffer_rgba(self.mailbox.next_frame()?, self.width, self.height)
-    }
-
-    /// Return the physical pixel dimensions emitted by this capture source.
-    #[must_use]
-    pub const fn dimensions(&self) -> (u32, u32) {
-        (self.width, self.height)
     }
 }
 

@@ -9,8 +9,8 @@ use std::{
 use webp_animation::Decoder;
 
 use super::{
-    MAX_RECORDING_BYTES, RecordingSettings, duration_timestamp, encode_frame, record_frames,
-    webp::WebpWriter,
+    MAX_RECORDING_BYTES, RecordingCallbacks, RecordingSettings, duration_timestamp, encode_frame,
+    record_frames, webp::WebpWriter,
 };
 use sharer::config::CaptureResolution;
 
@@ -85,6 +85,66 @@ fn muxed_frames_preserve_alpha_pixels_and_real_durations() {
 }
 
 #[test]
+fn optimized_sparse_frames_preserve_the_full_independent_canvas() {
+    for size in [128_u32, 512, 2000] {
+        let dimensions = (size, size);
+        let pixels = usize::try_from(size * size).unwrap();
+        let mut writer =
+            WebpWriter::new(Cursor::new(Vec::new()), dimensions, MAX_RECORDING_BYTES).unwrap();
+        let mut expected_pixels = Vec::new();
+
+        for (index, crop) in [None, Some((size / 2, size / 2)), Some((2, 6)), None]
+            .into_iter()
+            .enumerate()
+        {
+            let mut rgba = if index == 0 {
+                [0, 0, 255, 255].repeat(pixels)
+            } else {
+                vec![0_u8; pixels * 4]
+            };
+
+            if let Some((left, top)) = crop {
+                for y in top..top + 4 {
+                    for x in left..left + 4 {
+                        let offset = usize::try_from((y * size + x) * 4).unwrap();
+
+                        rgba[offset..offset + 4].copy_from_slice(&[255, 0, 0, 255]);
+                    }
+                }
+            }
+
+            let encoded = encode_frame(dimensions, &rgba).unwrap();
+
+            if index == 1 {
+                // The pinned native encoder retains a cropped one-frame animation.
+                assert_eq!(encoded.get(30..34), Some(b"ANIM".as_slice()));
+                assert_eq!(encoded.get(44..48), Some(b"ANMF".as_slice()));
+            }
+
+            let expected = Decoder::new(&encoded).unwrap().into_iter().next().unwrap();
+
+            expected_pixels.push(expected.data().to_vec());
+            assert!(
+                writer
+                    .add_frame(&encoded, i32::try_from(index * 40).unwrap())
+                    .unwrap()
+            );
+        }
+
+        let (output, _) = writer.finish(160).unwrap();
+        let bytes = output.into_inner();
+        let frames: Vec<_> = Decoder::new(&bytes).unwrap().into_iter().collect();
+
+        assert_eq!(frames.len(), 4);
+
+        for (index, (frame, expected)) in frames.iter().zip(expected_pixels).enumerate() {
+            assert_eq!(frame.data(), expected, "canvas {size}, frame {index}");
+            assert_eq!(frame.timestamp(), i32::try_from((index + 1) * 40).unwrap());
+        }
+    }
+}
+
+#[test]
 fn output_budget_keeps_a_valid_complete_first_frame() {
     let dimensions = (2, 2);
     let encoded = encode_frame(dimensions, &[255; 16]).unwrap();
@@ -119,11 +179,19 @@ fn budget_stop_preserves_frames_and_reports_the_limit() {
     let writer = WebpWriter::new(Cursor::new(Vec::new()), dimensions, first_length).unwrap();
     let (_sender, receiver) = mpsc::channel();
     let mut captures = 0;
-    let animation = record_frames(writer, &receiver, settings(), advancing_clock(), || {
-        captures += 1;
+    let animation = record_frames(
+        writer,
+        &receiver,
+        settings(),
+        RecordingCallbacks {
+            now: advancing_clock(),
+            capture: || {
+                captures += 1;
 
-        Ok(vec![255; 16])
-    })
+                Ok(vec![255; 16])
+            },
+        },
+    )
     .unwrap();
 
     assert!(animation.stopped_at_limit);
@@ -139,15 +207,23 @@ fn requested_stop_keeps_repeated_frames_and_timing() {
     let writer = WebpWriter::new(Cursor::new(Vec::new()), (2, 2), MAX_RECORDING_BYTES).unwrap();
     let (sender, receiver) = mpsc::channel();
     let mut captures = 0;
-    let animation = record_frames(writer, &receiver, settings(), advancing_clock(), || {
-        captures += 1;
+    let animation = record_frames(
+        writer,
+        &receiver,
+        settings(),
+        RecordingCallbacks {
+            now: advancing_clock(),
+            capture: || {
+                captures += 1;
 
-        if captures == 2 {
-            sender.send(()).unwrap();
-        }
+                if captures == 2 {
+                    sender.send(()).unwrap();
+                }
 
-        Ok(vec![255; 16])
-    })
+                Ok(vec![255; 16])
+            },
+        },
+    )
     .unwrap();
     let bytes = animation.output.into_inner();
     let frames: Vec<_> = Decoder::new(&bytes).unwrap().into_iter().collect();
@@ -165,11 +241,19 @@ fn duration_limit_stops_without_a_stop_message() {
     let writer = WebpWriter::new(Cursor::new(Vec::new()), (2, 2), MAX_RECORDING_BYTES).unwrap();
     let (_sender, receiver) = mpsc::channel();
     let mut captures = 0;
-    let animation = record_frames(writer, &receiver, settings(), advancing_clock(), || {
-        captures += 1;
+    let animation = record_frames(
+        writer,
+        &receiver,
+        settings(),
+        RecordingCallbacks {
+            now: advancing_clock(),
+            capture: || {
+                captures += 1;
 
-        Ok(vec![255; 16])
-    })
+                Ok(vec![255; 16])
+            },
+        },
+    )
     .unwrap();
 
     assert!(!animation.stopped_at_limit);

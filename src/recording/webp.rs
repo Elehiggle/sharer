@@ -24,7 +24,10 @@ pub(super) struct WebpWriter<W> {
     has_alpha: bool,
 }
 
-impl<W: Write + Seek> WebpWriter<W> {
+impl<W> WebpWriter<W>
+where
+    W: Write + Seek,
+{
     pub(super) fn new(mut output: W, dimensions: (u32, u32), max_bytes: u64) -> Result<Self> {
         recording_frame_bytes(dimensions)?;
         anyhow::ensure!(
@@ -60,7 +63,7 @@ impl<W: Write + Seek> WebpWriter<W> {
 
     /// Return false without changing the file if the complete next frame will not fit.
     pub(super) fn add_frame(&mut self, encoded: &[u8], timestamp: i32) -> Result<bool> {
-        let frame = frame_data(encoded)?;
+        let frame = frame_data(encoded, self.dimensions)?;
         let chunk_size = frame_chunk_size(frame.bytes.len())?;
         let next_length = self
             .length
@@ -79,11 +82,11 @@ impl<W: Write + Seek> WebpWriter<W> {
         self.output.write_all(&chunk_size.to_le_bytes())?;
         let mut header = [0_u8; 16];
 
-        header[6..9].copy_from_slice(&uint24(self.dimensions.0 - 1)?);
-        header[9..12].copy_from_slice(&uint24(self.dimensions.1 - 1)?);
-        // Full-canvas independent frames replace every pixel, including transparent ones.
-        // Do not blend; do not dispose. No delta frame depends on an earlier frame.
-        header[15] = 0x02;
+        header[..12].copy_from_slice(&frame.rectangle);
+        // Each independently encoded crop has a transparent canvas outside its rectangle.
+        // Clear the preceding rectangle to transparent, then overwrite the new rectangle.
+        // This also preserves transparency when the encoder optimizes a frame to a crop.
+        header[15] = 0x03; // Do not blend; dispose to the transparent background.
         self.output.write_all(&header)?;
         self.output.write_all(frame.bytes)?;
         self.previous = Some(FramePosition {
@@ -148,11 +151,12 @@ fn uint24(value: u32) -> Result<[u8; 3]> {
 
 struct EncodedFrame<'a> {
     bytes: &'a [u8],
+    rectangle: [u8; 12],
     has_alpha: bool,
 }
 
-/// Extract the padded ALPH + VP8 or VP8L chunks of the bounded single-frame encoder.
-fn frame_data(encoded: &[u8]) -> Result<EncodedFrame<'_>> {
+/// Extract a static frame or the native encoder's optimized single-frame animation.
+fn frame_data(encoded: &[u8], dimensions: (u32, u32)) -> Result<EncodedFrame<'_>> {
     anyhow::ensure!(
         encoded.get(..4) == Some(b"RIFF") && encoded.get(8..12) == Some(b"WEBP"),
         "encoder returned an invalid WebP frame"
@@ -164,55 +168,147 @@ fn frame_data(encoded: &[u8]) -> Result<EncodedFrame<'_>> {
         "encoder returned an invalid WebP frame size"
     );
     let mut offset = 12_usize;
-    let mut image_start = None;
-    let mut image_end = None;
+    let mut features = None;
+    let mut animation_params = false;
+    let mut image = None;
     let mut has_alpha = false;
+    let mut rectangle = [0_u8; 12];
+
+    rectangle[6..9].copy_from_slice(&uint24(dimensions.0 - 1)?);
+    rectangle[9..12].copy_from_slice(&uint24(dimensions.1 - 1)?);
 
     while offset < encoded.len() {
-        let header_end = offset.checked_add(8).context("WebP frame is too large")?;
-        let header = encoded
-            .get(offset..header_end)
-            .context("encoder returned a truncated WebP chunk")?;
-        let length = usize::try_from(u32::from_le_bytes(header[4..8].try_into()?))?;
-        let end = header_end
-            .checked_add(length)
-            .and_then(|end| end.checked_add(length % 2))
-            .filter(|end| *end <= encoded.len())
-            .context("encoder returned a truncated WebP chunk")?;
+        let chunk = read_chunk(encoded, offset)?;
 
-        match &header[..4] {
-            b"VP8X" if image_start.is_none() && length == 10 => {}
-
-            b"ALPH" if image_start.is_none() => {
-                has_alpha = true;
-                image_start = Some(offset);
+        match chunk.kind {
+            b"VP8X" if offset == 12 && chunk.body.len() == 10 => {
+                anyhow::ensure!(
+                    read_uint24(&chunk.body[4..7]) + 1 == dimensions.0
+                        && read_uint24(&chunk.body[7..10]) + 1 == dimensions.1,
+                    "encoder returned unexpected WebP canvas dimensions"
+                );
+                features = Some(chunk.body[0]);
+                has_alpha = chunk.body[0] & 0x10 != 0;
             }
 
-            b"VP8 " | b"VP8L" if image_end.is_none() => {
-                if &header[..4] == b"VP8L" {
-                    let alpha_byte = encoded
-                        .get(header_end + 4)
-                        .filter(|_| length >= 5)
-                        .context("encoder returned a truncated lossless WebP frame")?;
+            b"ANIM"
+                if !animation_params
+                    && image.is_none()
+                    && features.is_some_and(|flags| flags & 0x02 != 0)
+                    && chunk.body.len() == 6 =>
+            {
+                animation_params = true;
+            }
 
-                    has_alpha |= alpha_byte & 0x10 != 0;
-                }
+            b"ANMF" if animation_params && image.is_none() && chunk.body.len() >= 16 => {
+                rectangle.copy_from_slice(&chunk.body[..12]);
+                has_alpha |= validate_rectangle(&rectangle, dimensions)?;
+                image = Some(image_chunks(&chunk.body[16..])?);
+            }
 
-                image_start.get_or_insert(offset);
-                image_end = Some(end);
+            b"ALPH" | b"VP8 " | b"VP8L" if !animation_params && image.is_none() => {
+                image = Some(image_chunks(&encoded[offset..])?);
+
+                break;
             }
 
             _ => bail!("encoder returned an unexpected WebP frame chunk"),
         }
 
-        offset = end;
+        offset = chunk.end;
     }
 
+    let image = image.context("WebP frame has no pixels")?;
+
     Ok(EncodedFrame {
-        bytes: &encoded[image_start.context("WebP frame has no pixels")?
-            ..image_end.context("WebP frame has no pixels")?],
+        bytes: image.bytes,
+        rectangle,
+        has_alpha: has_alpha || image.has_alpha,
+    })
+}
+
+struct Chunk<'a> {
+    kind: &'a [u8],
+    body: &'a [u8],
+    end: usize,
+}
+
+fn read_chunk(encoded: &[u8], offset: usize) -> Result<Chunk<'_>> {
+    let header_end = offset.checked_add(8).context("WebP frame is too large")?;
+    let header = encoded
+        .get(offset..header_end)
+        .context("encoder returned a truncated WebP chunk")?;
+    let length = usize::try_from(u32::from_le_bytes(header[4..8].try_into()?))?;
+    let body_end = header_end
+        .checked_add(length)
+        .context("WebP frame is too large")?;
+    let end = body_end
+        .checked_add(length % 2)
+        .filter(|end| *end <= encoded.len())
+        .context("encoder returned a truncated WebP chunk")?;
+
+    Ok(Chunk {
+        kind: &header[..4],
+        body: &encoded[header_end..body_end],
+        end,
+    })
+}
+
+struct EncodedImage<'a> {
+    bytes: &'a [u8],
+    has_alpha: bool,
+}
+
+/// Extract the padded ALPH + VP8 or VP8L chunks, retaining no pixel or byte copies.
+fn image_chunks(chunks: &[u8]) -> Result<EncodedImage<'_>> {
+    let mut offset = 0;
+    let mut has_alpha = false;
+    let mut has_pixels = false;
+
+    while offset < chunks.len() {
+        let chunk = read_chunk(chunks, offset)?;
+
+        match chunk.kind {
+            b"ALPH" if !has_alpha && !has_pixels => has_alpha = true,
+
+            b"VP8 " if !has_pixels => has_pixels = true,
+
+            b"VP8L" if !has_alpha && !has_pixels && chunk.body.len() >= 5 => {
+                has_alpha = chunk.body[4] & 0x10 != 0;
+                has_pixels = true;
+            }
+
+            _ => bail!("encoder returned an unexpected WebP image chunk"),
+        }
+
+        offset = chunk.end;
+    }
+
+    anyhow::ensure!(has_pixels, "WebP frame has no pixels");
+
+    Ok(EncodedImage {
+        bytes: chunks,
         has_alpha,
     })
+}
+
+fn read_uint24(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], 0])
+}
+
+/// Return whether a cropped frame leaves part of its independent canvas transparent.
+fn validate_rectangle(rectangle: &[u8; 12], dimensions: (u32, u32)) -> Result<bool> {
+    let x = read_uint24(&rectangle[..3]) * 2;
+    let y = read_uint24(&rectangle[3..6]) * 2;
+    let width = read_uint24(&rectangle[6..9]) + 1;
+    let height = read_uint24(&rectangle[9..12]) + 1;
+
+    anyhow::ensure!(
+        x + width <= dimensions.0 && y + height <= dimensions.1,
+        "encoder returned an invalid WebP frame rectangle"
+    );
+
+    Ok(x != 0 || y != 0 || width != dimensions.0 || height != dimensions.1)
 }
 
 #[cfg(test)]
@@ -231,7 +327,7 @@ mod tests {
     #[test]
     fn malformed_encoder_output_is_rejected() {
         for bytes in [b"RIFF".as_slice(), b"RIFF\x04\0\0\0WEBPVP8 "] {
-            assert!(frame_data(bytes).is_err());
+            assert!(frame_data(bytes, (2, 2)).is_err());
         }
     }
 }

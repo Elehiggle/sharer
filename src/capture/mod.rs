@@ -277,7 +277,6 @@ impl RegionCapturer {
     /// Returns an error when the region does not fit on an available monitor.
     pub fn new(region: DesktopRegion, capture_resolution: CaptureResolution) -> Result<Self> {
         let _ = capture_resolution;
-        recording_frame_bytes((region.width, region.height))?;
         let monitor = xcap::Monitor::from_point(region.x, region.y)
             .context("failed to find the recording display")?;
         let monitor_x = monitor.x().context("failed to read display position")?;
@@ -304,6 +303,20 @@ impl RegionCapturer {
         })
     }
 
+    /// Prepare repeated recording with a bounded physical frame size.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the region is too large for recording or cannot be captured.
+    pub fn new_for_recording(
+        region: DesktopRegion,
+        capture_resolution: CaptureResolution,
+    ) -> Result<Self> {
+        recording_frame_bytes((region.width, region.height))?;
+
+        Self::new(region, capture_resolution)
+    }
+
     /// Capture one RGBA frame.
     ///
     /// # Errors
@@ -325,9 +338,9 @@ impl RegionCapturer {
 
 /// Validate recording dimensions before allocating native capture or encoder buffers.
 ///
-/// Each tightly packed RGBA frame is limited to 32 MiB, which permits UHD (3840 × 2160)
-/// capture. Native capture and codec scratch buffers also scale with this bounded frame
-/// size; this is not a guarantee about the process's total resident memory.
+/// Each RGBA frame is limited to 32 MiB, which permits UHD (3840 x 2160) capture.
+/// Native capture and codec scratch buffers also scale with this bounded frame size.
+/// This is not a guarantee about the process's total resident memory.
 ///
 /// # Errors
 ///
