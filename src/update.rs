@@ -129,6 +129,18 @@ fn check(tor_proxy: Option<&str>) -> Result<Option<UpdateInfo>> {
 mod tests {
     use semver::Version;
 
+    use super::{UpdateCheck, spawn_check};
+
+    #[test]
+    fn required_tor_without_a_proxy_skips_the_network_check() {
+        let receiver = spawn_check(None, true).unwrap();
+        let event = receiver.try_recv().unwrap();
+
+        assert!(
+            matches!(event, UpdateCheck::Failed(message) if message.contains("Tor is required"))
+        );
+    }
+
     #[test]
     fn semantic_versions_compare_release_order() {
         assert!(Version::parse("0.2.0").unwrap() > Version::parse("0.1.9").unwrap());

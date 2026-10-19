@@ -139,6 +139,9 @@ ShareR --clipboard --time 86400
 # Require Tor and refuse a direct upload
 ShareR document.pdf --require-tor
 
+# Require Tor for every upload and the update check in this desktop session
+ShareR --require-tor
+
 # Browse history
 ShareR --history
 ShareR --history --history-limit 5 --json
@@ -148,6 +151,8 @@ ShareR --renderer software
 ```
 
 The desktop defaults to the platform's preferred renderer. Use `--renderer gpu` to require it or `--renderer software` if the GPU renderer is unavailable or misbehaves. `auto` continues to honor Slint's renderer environment overrides.
+
+`--require-tor` (alias `--tor`) also applies with `--background`. In a desktop session, changing the saved Tor preference cannot relax the command-line requirement. The flag does not change the saved preference.
 
 Run `ShareR --help` for every option.
 

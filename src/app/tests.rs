@@ -19,9 +19,9 @@ use slint::{ComponentHandle as _, PhysicalPosition, PhysicalSize};
 use super::{
     ActivitySnapshot, AppWindow, CloseAction, CloseState, FailureStage, Job, JobCallbacks,
     JobSource, QuitDecision, QuitState, RendererPreference, UploadOptions, UploadProgress,
-    close_action, force_full_repaint, invalidate_activity_local_path, process_job_with_history,
-    quit_decision, region::snap_changed, renderer_name, restore_event_requests_full_repaint,
-    result_status, shortcut_event_should_capture,
+    close_action, force_full_repaint, invalidate_activity_local_path, job::receive_job,
+    process_job_with_history, quit_decision, region::snap_changed, renderer_name,
+    restore_event_requests_full_repaint, result_status, shortcut_event_should_capture,
 };
 use sharer::upload::{UploadCancellation, UploadPayload, UploadTarget, UploaderKind};
 
@@ -87,6 +87,100 @@ fn fake_upload_server(status: &str, body: &str) -> (String, thread::JoinHandle<(
     });
 
     (format!("http://{address}/upload"), server)
+}
+
+#[test]
+fn worker_enforces_the_session_requirement_for_every_queued_upload() {
+    let directory = tempfile::tempdir().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    // Both initial settings and later edits can produce jobs without the saved Tor preference.
+    for saved_requirement in [false, true, false] {
+        let mut upload = custom_upload("https://uploads.example.test/upload".to_owned());
+
+        upload.require_tor = saved_requirement;
+        sender
+            .send(prepared_capture(
+                directory.path(),
+                upload,
+                Arc::new(UploadCancellation::default()),
+            ))
+            .unwrap();
+        let job = receive_job(&receiver, true).unwrap();
+
+        assert!(job.upload.unwrap().require_tor);
+    }
+}
+
+#[test]
+fn normal_sessions_preserve_each_jobs_tor_preference_and_local_captures() {
+    let directory = tempfile::tempdir().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    for saved_requirement in [false, true] {
+        let mut upload = custom_upload("https://uploads.example.test/upload".to_owned());
+
+        upload.require_tor = saved_requirement;
+        sender
+            .send(prepared_capture(
+                directory.path(),
+                upload,
+                Arc::new(UploadCancellation::default()),
+            ))
+            .unwrap();
+        let job = receive_job(&receiver, false).unwrap();
+
+        assert_eq!(job.upload.unwrap().require_tor, saved_requirement);
+    }
+
+    let mut local = prepared_capture(
+        directory.path(),
+        custom_upload(String::new()),
+        Arc::new(UploadCancellation::default()),
+    );
+
+    local.upload = None;
+    sender.send(local).unwrap();
+
+    assert!(receive_job(&receiver, true).unwrap().upload.is_none());
+}
+
+#[test]
+fn session_requirement_does_not_change_saved_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = sharer::storage::PlatformStorage::open_in(directory.path()).unwrap();
+    let config = sharer::config::AppConfig::default();
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    config.save(&storage).unwrap();
+    sender
+        .send(prepared_capture(
+            directory.path(),
+            custom_upload("https://uploads.example.test/upload".to_owned()),
+            Arc::new(UploadCancellation::default()),
+        ))
+        .unwrap();
+
+    assert!(
+        receive_job(&receiver, true)
+            .unwrap()
+            .upload
+            .unwrap()
+            .require_tor
+    );
+
+    // An unrelated settings save must not persist the session-only override.
+    let mut next = sharer::config::AppConfig::load(&storage).unwrap();
+
+    next.behavior.completion_sound = true;
+    next.save(&storage).unwrap();
+
+    assert!(
+        !sharer::config::AppConfig::load(&storage)
+            .unwrap()
+            .privacy
+            .require_tor
+    );
 }
 
 #[test]

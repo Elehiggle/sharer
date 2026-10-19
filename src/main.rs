@@ -42,7 +42,7 @@ use std::{io::Write as _, process::ExitCode};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser as _;
-use cli::{Cli, RendererPreference};
+use cli::Cli;
 use sharer::{
     clipboard,
     config::AppConfig,
@@ -62,7 +62,7 @@ fn main() -> ExitCode {
     let result = if cli.is_headless() {
         run_headless(&cli, &mut output)
     } else {
-        run_desktop(cli.background, cli.renderer)
+        run_desktop(&cli)
     };
 
     match result {
@@ -88,12 +88,12 @@ fn prepare_windows_console(headless: bool) {
 const fn prepare_windows_console(_headless: bool) {}
 
 #[cfg(feature = "desktop")]
-fn run_desktop(background: bool, renderer: RendererPreference) -> Result<()> {
-    app::run(!background, renderer)
+fn run_desktop(cli: &Cli) -> Result<()> {
+    app::run(cli.desktop_options())
 }
 
 #[cfg(not(feature = "desktop"))]
-fn run_desktop(_background: bool, _renderer: RendererPreference) -> Result<()> {
+fn run_desktop(_cli: &Cli) -> Result<()> {
     bail!("desktop UI is not included in this build; rebuild with `--features desktop`")
 }
 
@@ -363,6 +363,15 @@ mod tests {
     use sharer::upload::UploadReceipt;
 
     use super::*;
+
+    #[cfg(not(feature = "desktop"))]
+    #[test]
+    fn tor_session_without_desktop_support_fails_explicitly() {
+        let cli = Cli::try_parse_from(["ShareR", "--require-tor"]).unwrap();
+        let error = run_desktop(&cli).unwrap_err();
+
+        assert!(error.to_string().contains("desktop UI is not included"));
+    }
 
     #[test]
     fn cli_provider_override_uses_only_that_providers_credential() {
