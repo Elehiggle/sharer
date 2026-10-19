@@ -340,12 +340,9 @@ pub fn run(options: DesktopOptions) -> Result<()> {
     let upload_cancellation = Arc::new(UploadCancellation::default());
     let quit_after_job = Rc::new(Cell::new(false));
 
-    spawn_worker(
-        job_rx,
-        result_tx,
-        Arc::clone(&upload_progress),
-        options.require_tor,
-    )?;
+    let worker_progress = Arc::clone(&upload_progress);
+
+    spawn_worker(job_rx, result_tx, worker_progress, options.require_tor)?;
     let callback_resources = CallbackResources {
         activity: Rc::clone(&activity),
         hotkeys: Rc::clone(&hotkeys),
