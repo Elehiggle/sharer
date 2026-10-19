@@ -351,7 +351,7 @@ impl UploadPayload {
             }
         };
         if self.mime != format.mime() {
-            self.mime = format.mime().to_owned();
+            format.mime().clone_into(&mut self.mime);
         }
         if let Some((reader, length)) = stripped_body {
             self.body = PayloadBody::Reader {

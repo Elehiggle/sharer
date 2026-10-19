@@ -1,6 +1,6 @@
 //! Bounded, lossless removal of identifying image metadata.
 
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
 
 use anyhow::{Context, Result, bail};
 
@@ -9,6 +9,56 @@ use super::ReadSeek;
 const XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const MAX_XMP_BYTES: usize = 64 * 1024;
 const MAX_MPF_IMAGES: usize = 32;
+const IO_BUFFER_BYTES: usize = 1024;
+
+/// Keep small container reads and forward skips inside one bounded input buffer.
+/// `BufReader::seek(Start(_))` would otherwise discard that buffer for every chunk.
+struct BufferedImage<'a> {
+    reader: BufReader<&'a mut dyn ReadSeek>,
+    position: u64,
+}
+
+impl<'a> BufferedImage<'a> {
+    fn new(reader: &'a mut dyn ReadSeek) -> Result<Self> {
+        reader.seek(SeekFrom::Start(0))?;
+        Ok(Self {
+            reader: BufReader::with_capacity(IO_BUFFER_BYTES, reader),
+            position: 0,
+        })
+    }
+}
+
+impl Read for BufferedImage<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let count = self.reader.read(bytes)?;
+        self.position += u64::try_from(count).map_err(io::Error::other)?;
+        Ok(count)
+    }
+}
+
+impl Seek for BufferedImage<'_> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        let target = match position {
+            SeekFrom::Start(target) => target,
+            SeekFrom::Current(offset) => self
+                .position
+                .checked_add_signed(offset)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid image seek"))?,
+            SeekFrom::End(offset) => {
+                self.position = self.reader.seek(SeekFrom::End(offset))?;
+                return Ok(self.position);
+            }
+        };
+        let distance = i128::from(target) - i128::from(self.position);
+        if let Ok(offset) = i64::try_from(distance) {
+            self.reader.seek_relative(offset)?;
+        } else {
+            self.reader.seek(SeekFrom::Start(target))?;
+        }
+        self.position = target;
+        Ok(target)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MetadataFormat {
@@ -60,6 +110,8 @@ pub(super) fn strip_to_file(
     length: u64,
     format: MetadataFormat,
 ) -> Result<Option<(std::fs::File, u64)>> {
+    let mut buffered = BufferedImage::new(reader)?;
+    let reader: &mut dyn ReadSeek = &mut buffered;
     verify_length(reader, length)?;
     let prepared = prepare(reader, length, format)?;
     reader.seek(SeekFrom::Start(0))?;
@@ -67,8 +119,8 @@ pub(super) fn strip_to_file(
         return Ok(None);
     }
 
-    let mut output =
-        tempfile::tempfile().context("failed to create private image temporary file")?;
+    let output = tempfile::tempfile().context("failed to create private image temporary file")?;
+    let mut output = BufWriter::with_capacity(IO_BUFFER_BYTES, output);
     let mut position = 0;
     while let Some(piece) = next_piece(reader, length, format, &mut position)? {
         if matches!(piece.kind, PieceKind::Drop) {
@@ -97,6 +149,10 @@ pub(super) fn strip_to_file(
     let output_length = output.seek(SeekFrom::End(0))?;
     output.seek(SeekFrom::Start(0))?;
     reader.seek(SeekFrom::Start(0))?;
+    let output = output
+        .into_inner()
+        .map_err(io::IntoInnerError::into_error)
+        .context("failed to finish cleaned image temporary file")?;
     Ok(Some((output, output_length)))
 }
 
@@ -213,10 +269,8 @@ fn prepare(reader: &mut dyn ReadSeek, length: u64, format: MetadataFormat) -> Re
             });
         }
     }
-    if changed {
-        if let Some(mpf) = &mut mpf {
-            repair_mpf(reader, length, mpf)?;
-        }
+    if changed && let Some(mpf) = &mut mpf {
+        repair_mpf(reader, length, mpf)?;
     }
     Ok(Prepared { changed, mpf })
 }
@@ -663,6 +717,29 @@ mod tests {
         }
     }
 
+    fn jpeg_icc_payload(bytes: &[u8]) -> Vec<u8> {
+        let mut position = 2;
+        let mut profile = Vec::new();
+        while position < bytes.len() {
+            assert_eq!(bytes[position], 0xff);
+            let marker = bytes[position + 1];
+            if marker == 0xda || marker == 0xd9 {
+                break;
+            }
+            let size = usize::from(u16::from_be_bytes([
+                bytes[position + 2],
+                bytes[position + 3],
+            ]));
+            let data = &bytes[position + 4..position + 2 + size];
+            if marker == 0xe2 && data.starts_with(b"ICC_PROFILE\0") {
+                profile.extend_from_slice(data);
+            }
+            position += 2 + size;
+        }
+        assert!(!profile.is_empty());
+        profile
+    }
+
     fn jpeg_segment(marker: u8, data: &[u8]) -> Vec<u8> {
         let mut bytes = vec![0xff, marker];
         bytes.extend_from_slice(&u16::try_from(data.len() + 2).unwrap().to_be_bytes());
@@ -679,7 +756,7 @@ mod tests {
         jpeg
     }
 
-    fn png_chunk(bytes: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    fn png_chunk(bytes: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
         bytes.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
         bytes.extend_from_slice(kind);
         bytes.extend_from_slice(data);
@@ -896,10 +973,9 @@ mod tests {
                 .windows(13)
                 .any(|bytes| bytes == b"HDRGainMapVer")
         );
-        assert_eq!(
-            metastrip::extract_metadata(&stripped).unwrap().icc_profile,
-            metastrip::extract_metadata(HDR).unwrap().icc_profile
-        );
+        // Compare ICC payloads directly: the general metadata library does not parse
+        // this concatenated HDR JPEG container reliably, although both images decode.
+        assert_eq!(jpeg_icc_payload(&stripped), jpeg_icc_payload(HDR));
     }
 
     #[test]
@@ -908,8 +984,8 @@ mod tests {
             r#"<evil:GPS xmlns:evil="http://ns.adobe.com/exif/1.0/">location</evil:GPS>"#,
             "<!-- location -->",
             r#"<rdf:Description rdf:about="personal-name"/>"#,
-            r#"<HDRGainMap:HDRGainMapHeadroom><![CDATA[location]]></HDRGainMap:HDRGainMapHeadroom>"#,
-            r#"<?private location?>"#,
+            r"<HDRGainMap:HDRGainMapHeadroom><![CDATA[location]]></HDRGainMap:HDRGainMapHeadroom>",
+            r"<?private location?>",
         ] {
             let xml = format!(
                 r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:HDRGainMap="http://ns.apple.com/HDRGainMap/1.0/"><HDRGainMap:HDRGainMapVersion>131072</HDRGainMap:HDRGainMapVersion>{extra}</rdf:Description></rdf:RDF></x:xmpmeta>"#
@@ -924,6 +1000,61 @@ mod tests {
         let mut jpeg = jpeg_with_xmp(aliased);
         strip_in_place(&mut jpeg, MetadataFormat::Jpeg).unwrap();
         assert_eq!(jpeg, [0xff, 0xd8, 0xff, 0xd9]);
+    }
+
+    #[test]
+    fn many_small_chunks_use_bounded_underlying_read_and_seek_operations() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Counted {
+            cursor: Cursor<Vec<u8>>,
+            reads: Arc<AtomicUsize>,
+            seeks: Arc<AtomicUsize>,
+        }
+        impl Read for Counted {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+                self.cursor.read(bytes)
+            }
+        }
+        impl Seek for Counted {
+            fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+                self.seeks.fetch_add(1, Ordering::Relaxed);
+                self.cursor.seek(position)
+            }
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png_chunk(&mut png, b"eXIf", b"location");
+        for _ in 0..50_000 {
+            png_chunk(&mut png, b"IDAT", &[0]);
+        }
+        png_chunk(&mut png, b"IEND", &[]);
+        let length = u64::try_from(png.len()).unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let seeks = Arc::new(AtomicUsize::new(0));
+        let reader = Counted {
+            cursor: Cursor::new(png),
+            reads: Arc::clone(&reads),
+            seeks: Arc::clone(&seeks),
+        };
+        let mut payload = UploadPayload::from_reader(
+            reader,
+            length,
+            "image.data".into(),
+            "application/octet-stream".into(),
+        );
+        payload.remove_exif().unwrap();
+        assert!(
+            reads.load(Ordering::Relaxed) < 2_000,
+            "tiny chunks caused too many unbuffered reads"
+        );
+        assert!(
+            seeks.load(Ordering::Relaxed) < 2_000,
+            "tiny chunks caused {} underlying seeks",
+            seeks.load(Ordering::Relaxed)
+        );
     }
 
     #[test]
