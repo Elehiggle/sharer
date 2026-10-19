@@ -65,8 +65,8 @@ serde_json = "1"
 socket2 = "0.6.1"
 tokio = { version = "1", features = ["rt", "time"] }
 slint = { version = "1.15.1", default-features = false, features = ["accessibility", "backend-winit", "compat-1-2", "renderer-software", "std", "unstable-winit-030"], optional = true }
-thiserror = "2"
 tempfile = "3.27"
+thiserror = "2"
 tray-icon = { version = "0.22.0", default-features = false, optional = true }
 url = "2"
 webp-animation = { version = "0.10.0", default-features = false, features = ["static"], optional = true }
