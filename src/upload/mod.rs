@@ -317,8 +317,9 @@ impl UploadPayload {
     /// Remove identifying EXIF, XMP, IPTC, comments, and PNG text without recompressing pixels.
     ///
     /// JPEG, PNG, and WebP are detected from their bytes, including renamed images.
-    /// Color profiles and recognized HDR rendering metadata are retained. Mixed HDR XMP
-    /// that cannot safely be separated is rejected. File/reader payloads stay streamed.
+    /// Color profiles and recognized HDR rendering metadata are retained.
+    /// Mixed HDR XMP and cleaning that would invalidate structural references are rejected.
+    /// File and reader payloads stay streamed.
     ///
     /// # Errors
     ///
@@ -338,6 +339,7 @@ impl UploadPayload {
                 !claimed_image,
                 "image signature does not match a supported image container"
             );
+
             return Ok(());
         };
         let stripped_body = match &mut self.body {
@@ -345,20 +347,25 @@ impl UploadPayload {
                 strip_in_place(bytes, format)?;
                 None
             }
+
             PayloadBody::File { file, length } => strip_to_file(file, *length, format)?,
+
             PayloadBody::Reader { reader, length } => {
                 strip_to_file(reader.as_mut(), *length, format)?
             }
         };
+
         if self.mime != format.mime() {
             format.mime().clone_into(&mut self.mime);
         }
+
         if let Some((reader, length)) = stripped_body {
             self.body = PayloadBody::Reader {
                 reader: Box::new(reader),
                 length,
             };
         }
+
         Ok(())
     }
 

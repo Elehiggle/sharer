@@ -140,6 +140,7 @@ fn stripping_a_large_file_uses_bounded_memory_and_a_streamed_result() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("large-image.data");
     let mut file = File::create(&path).unwrap();
+
     file.write_all(b"\x89PNG\r\n\x1a\n").unwrap();
     file.write_all(&4_u32.to_be_bytes()).unwrap();
     file.write_all(b"eXIfmeta\0\0\0\0").unwrap();
@@ -153,6 +154,7 @@ fn stripping_a_large_file_uses_bounded_memory_and_a_streamed_result() {
     drop(file);
     let mut payload = UploadPayload::from_path(&path).unwrap();
     let allocations = measure(|| payload.remove_exif().unwrap());
+
     assert!(
         allocations.bytes_max < 128 * 1024,
         "cleaning a large image held {} heap bytes",
