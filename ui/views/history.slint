@@ -66,29 +66,41 @@ component TableCell inherits Text {
 }
 
 component HistoryActions inherits HorizontalLayout {
+    in property <string> action-token;
+    private property <string> selected-token;
+    private property <bool> action-has-local;
+    private property <bool> action-has-remote;
+    private property <bool> action-has-delete;
+    callback prepare-menu();
+    prepare-menu => {
+        root.selected-token = root.action-token;
+        root.action-has-local = root.has-local;
+        root.action-has-remote = root.has-remote;
+        root.action-has-delete = root.has-delete;
+    }
     in property <bool> has-local;
     in property <bool> has-remote;
     in property <bool> has-delete;
-    callback open-link();
-    callback copy-link();
-    callback copy-delete-link();
-    callback open-local();
-    callback reveal-local();
-    callback copy-file();
-    callback copy-path();
-    callback remove-entry();
-    callback delete-local();
+    callback open-link(string);
+    callback copy-link(string);
+    callback copy-delete-link(string);
+    callback open-local(string);
+    callback reveal-local(string);
+    callback copy-file(string);
+    callback copy-path(string);
+    callback remove-entry(string);
+    callback delete-local(string);
     callback show-context-menu();
-    show-context-menu => { context-menu.show(); }
+    show-context-menu => { root.prepare-menu(); context-menu.show(); }
 
     width: 92px;
     height: Theme.control-height;
     vertical-stretch: 0;
     alignment: end;
     spacing: 4px;
-    IconButton { icon-source: Icons.open; description: "Open actions"; clicked => { open-menu.show(); } }
-    IconButton { icon-source: Icons.copy; description: "Copy actions"; clicked => { copy-menu.show(); } }
-    IconButton { icon-source: Icons.trash; description: "Delete actions"; destructive: true; clicked => { delete-menu.show(); } }
+    IconButton { icon-source: Icons.open; description: "Open actions"; clicked => { root.prepare-menu(); open-menu.show(); } }
+    IconButton { icon-source: Icons.copy; description: "Copy actions"; clicked => { root.prepare-menu(); copy-menu.show(); } }
+    IconButton { icon-source: Icons.trash; description: "Delete actions"; destructive: true; clicked => { root.prepare-menu(); delete-menu.show(); } }
 
     open-menu := PopupWindow {
         x: root.width - 214px;
@@ -103,9 +115,9 @@ component HistoryActions inherits HorizontalLayout {
             VerticalLayout {
                 padding: 5px;
                 spacing: 2px;
-                FlatButton { text: "Open local file"; enabled: root.has-local; clicked => { open-menu.close(); root.open-local(); } }
-                FlatButton { text: "Show in folder"; enabled: root.has-local; clicked => { open-menu.close(); root.reveal-local(); } }
-                FlatButton { text: "Open uploaded URL"; enabled: root.has-remote; clicked => { open-menu.close(); root.open-link(); } }
+                FlatButton { text: "Open local file"; enabled: root.action-has-local; clicked => { open-menu.close(); root.open-local(root.selected-token); } }
+                FlatButton { text: "Show in folder"; enabled: root.action-has-local; clicked => { open-menu.close(); root.reveal-local(root.selected-token); } }
+                FlatButton { text: "Open uploaded URL"; enabled: root.action-has-remote; clicked => { open-menu.close(); root.open-link(root.selected-token); } }
             }
         }
     }
@@ -123,10 +135,10 @@ component HistoryActions inherits HorizontalLayout {
             VerticalLayout {
                 padding: 5px;
                 spacing: 2px;
-                FlatButton { text: "Copy local file"; enabled: root.has-local; clicked => { copy-menu.close(); root.copy-file(); } }
-                FlatButton { text: "Copy local path"; enabled: root.has-local; clicked => { copy-menu.close(); root.copy-path(); } }
-                FlatButton { text: "Copy uploaded URL"; enabled: root.has-remote; clicked => { copy-menu.close(); root.copy-link(); } }
-                FlatButton { text: "Copy deletion URL"; enabled: root.has-delete; clicked => { copy-menu.close(); root.copy-delete-link(); } }
+                FlatButton { text: "Copy local file"; enabled: root.action-has-local; clicked => { copy-menu.close(); root.copy-file(root.selected-token); } }
+                FlatButton { text: "Copy local path"; enabled: root.action-has-local; clicked => { copy-menu.close(); root.copy-path(root.selected-token); } }
+                FlatButton { text: "Copy uploaded URL"; enabled: root.action-has-remote; clicked => { copy-menu.close(); root.copy-link(root.selected-token); } }
+                FlatButton { text: "Copy deletion URL"; enabled: root.action-has-delete; clicked => { copy-menu.close(); root.copy-delete-link(root.selected-token); } }
             }
         }
     }
@@ -144,8 +156,8 @@ component HistoryActions inherits HorizontalLayout {
             VerticalLayout {
                 padding: 5px;
                 spacing: 2px;
-                FlatButton { text: "Delete local copy"; enabled: root.has-local; clicked => { delete-menu.close(); root.delete-local(); } }
-                FlatButton { text: "Remove from history"; clicked => { delete-menu.close(); root.remove-entry(); } }
+                FlatButton { text: "Delete local copy"; enabled: root.action-has-local; clicked => { delete-menu.close(); root.delete-local(root.selected-token); } }
+                FlatButton { text: "Remove from history"; clicked => { delete-menu.close(); root.remove-entry(root.selected-token); } }
             }
         }
     }
@@ -163,17 +175,17 @@ component HistoryActions inherits HorizontalLayout {
             VerticalLayout {
                 padding: 5px;
                 spacing: 2px;
-                FlatButton { text: "Open local file"; enabled: root.has-local; clicked => { context-menu.close(); root.open-local(); } }
-                FlatButton { text: "Show in folder"; enabled: root.has-local; clicked => { context-menu.close(); root.reveal-local(); } }
-                FlatButton { text: "Open uploaded URL"; enabled: root.has-remote; clicked => { context-menu.close(); root.open-link(); } }
+                FlatButton { text: "Open local file"; enabled: root.action-has-local; clicked => { context-menu.close(); root.open-local(root.selected-token); } }
+                FlatButton { text: "Show in folder"; enabled: root.action-has-local; clicked => { context-menu.close(); root.reveal-local(root.selected-token); } }
+                FlatButton { text: "Open uploaded URL"; enabled: root.action-has-remote; clicked => { context-menu.close(); root.open-link(root.selected-token); } }
                 Rectangle { height: 1px; background: Theme.border; }
-                FlatButton { text: "Copy local file"; enabled: root.has-local; clicked => { context-menu.close(); root.copy-file(); } }
-                FlatButton { text: "Copy local path"; enabled: root.has-local; clicked => { context-menu.close(); root.copy-path(); } }
-                FlatButton { text: "Copy uploaded URL"; enabled: root.has-remote; clicked => { context-menu.close(); root.copy-link(); } }
-                FlatButton { text: "Copy deletion URL"; enabled: root.has-delete; clicked => { context-menu.close(); root.copy-delete-link(); } }
+                FlatButton { text: "Copy local file"; enabled: root.action-has-local; clicked => { context-menu.close(); root.copy-file(root.selected-token); } }
+                FlatButton { text: "Copy local path"; enabled: root.action-has-local; clicked => { context-menu.close(); root.copy-path(root.selected-token); } }
+                FlatButton { text: "Copy uploaded URL"; enabled: root.action-has-remote; clicked => { context-menu.close(); root.copy-link(root.selected-token); } }
+                FlatButton { text: "Copy deletion URL"; enabled: root.action-has-delete; clicked => { context-menu.close(); root.copy-delete-link(root.selected-token); } }
                 Rectangle { height: 1px; background: Theme.border; }
-                FlatButton { text: "Delete local copy"; enabled: root.has-local; clicked => { context-menu.close(); root.delete-local(); } }
-                FlatButton { text: "Remove from history"; clicked => { context-menu.close(); root.remove-entry(); } }
+                FlatButton { text: "Delete local copy"; enabled: root.action-has-local; clicked => { context-menu.close(); root.delete-local(root.selected-token); } }
+                FlatButton { text: "Remove from history"; clicked => { context-menu.close(); root.remove-entry(root.selected-token); } }
             }
         }
     }
@@ -188,15 +200,15 @@ export component HistoryView inherits Rectangle {
     in property <bool> has-next;
     in property <int> sort-column: 1;
     in property <bool> sort-ascending: false;
-    callback open-link(int);
-    callback copy-link(int);
-    callback copy-delete-link(int);
-    callback open-local(int);
-    callback reveal-local(int);
-    callback copy-file(int);
-    callback copy-path(int);
-    callback remove-entry(int);
-    callback delete-local(int);
+    callback open-link(string);
+    callback copy-link(string);
+    callback copy-delete-link(string);
+    callback open-local(string);
+    callback reveal-local(string);
+    callback copy-file(string);
+    callback copy-path(string);
+    callback remove-entry(string);
+    callback delete-local(string);
     callback previous-page();
     callback next-page();
     callback sort-column-clicked(int);
@@ -262,24 +274,25 @@ export component HistoryView inherits Rectangle {
                                     alignment: center;
                                     spacing: 2px;
                                     Text { text: row.filename; color: Theme.text; font-size: 12px; font-weight: 600; overflow: elide; }
-                                    Text { text: row.link != "" ? row.link : row.local-path; color: row.link != "" ? Theme.primary-bright : Theme.text-muted; font-size: 10px; overflow: elide; }
+                                    Text { text: row.link != "" ? row.display-link : row.display-local-path; color: row.link != "" ? Theme.primary-bright : Theme.text-muted; font-size: 10px; overflow: elide; }
                                 }
                                 TableCell { width: 20%; text: row.created; }
                                 TableCell { width: 10%; text: row.size; }
                                 TableCell { horizontal-stretch: 1; text: row.expires; }
                                 actions := HistoryActions {
+                                    action-token: row.action-token;
                                     has-local: row.local-path != "";
                                     has-remote: row.link != "";
                                     has-delete: row.delete-link != "";
-                                    open-link => { root.open-link(index); }
-                                    copy-link => { root.copy-link(index); }
-                                    copy-delete-link => { root.copy-delete-link(index); }
-                                    open-local => { root.open-local(index); }
-                                    reveal-local => { root.reveal-local(index); }
-                                    copy-file => { root.copy-file(index); }
-                                    copy-path => { root.copy-path(index); }
-                                    remove-entry => { root.remove-entry(index); }
-                                    delete-local => { root.delete-local(index); }
+                                    open-link(action-token) => { root.open-link(action-token); }
+                                    copy-link(action-token) => { root.copy-link(action-token); }
+                                    copy-delete-link(action-token) => { root.copy-delete-link(action-token); }
+                                    open-local(action-token) => { root.open-local(action-token); }
+                                    reveal-local(action-token) => { root.reveal-local(action-token); }
+                                    copy-file(action-token) => { root.copy-file(action-token); }
+                                    copy-path(action-token) => { root.copy-path(action-token); }
+                                    remove-entry(action-token) => { root.remove-entry(action-token); }
+                                    delete-local(action-token) => { root.delete-local(action-token); }
                                 }
                             }
                         }

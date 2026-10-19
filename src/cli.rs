@@ -334,3 +334,6 @@ mod tests {
         assert!(error.to_string().contains("invalid value 'warp-drive'"));
     }
 }
+
+#[cfg(test)]
+mod presentation_tests;

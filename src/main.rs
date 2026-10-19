@@ -38,7 +38,7 @@ mod slint_generated {
     slint::include_modules!();
 }
 
-use std::{io::Write as _, process::ExitCode};
+use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser as _;
@@ -47,6 +47,7 @@ use sharer::{
     clipboard,
     config::AppConfig,
     history::HistoryEntry,
+    presentation::safe_text,
     proxy::preferred_upload_route,
     storage::{PlatformStorage, default_capture_directory, monthly_capture_directory},
     upload::{UploadClient, UploadPayload, UploadTarget, UploaderKind, validate_uploader_url},
@@ -70,11 +71,15 @@ fn main() -> ExitCode {
 
         Err(error) => {
             let mut error_output = std::io::stderr().lock();
-            let _ = writeln!(error_output, "ShareR: {error:#}");
+            let _ = write_error(&mut error_output, &error);
 
             ExitCode::FAILURE
         }
     }
+}
+
+fn write_error(output: &mut impl std::io::Write, error: &anyhow::Error) -> std::io::Result<()> {
+    writeln!(output, "ShareR: {}", safe_text(&format!("{error:#}")))
 }
 
 #[cfg(windows)]
@@ -203,7 +208,7 @@ fn persist_and_write_upload_result(
     persist: impl FnOnce(&HistoryEntry) -> Result<()>,
 ) -> Result<()> {
     let history_saved = persist(entry).is_ok();
-    let link_written = writeln!(output, "{}", entry.link).is_ok();
+    let link_written = write_public_link(output, &entry.link).is_ok();
 
     match (history_saved, link_written) {
         (true, true) => Ok(()),
@@ -223,6 +228,12 @@ fn persist_and_write_upload_result(
              its deletion capability was not preserved"
         ),
     }
+}
+
+fn write_public_link(output: &mut impl std::io::Write, link: &str) -> Result<()> {
+    let link = url::Url::parse(link).context("uploaded public link is invalid")?;
+
+    writeln!(output, "{link}").context("failed to write uploaded public link")
 }
 
 fn retain_local_screenshot_after_upload_failure(
@@ -311,8 +322,16 @@ fn write_history(
 ) -> Result<()> {
     let entries = storage.history_page(cli.history_offset, cli.history_limit)?;
 
-    if cli.json {
-        serde_json::to_writer_pretty(&mut *output, &entries)
+    write_history_entries(&entries, cli.json, output)
+}
+
+fn write_history_entries(
+    entries: &[HistoryEntry],
+    json: bool,
+    output: &mut impl std::io::Write,
+) -> Result<()> {
+    if json {
+        serde_json::to_writer_pretty(&mut *output, entries)
             .context("failed to write JSON history")?;
         writeln!(output).context("failed to finish JSON history")?;
     } else if entries.is_empty() {
@@ -322,7 +341,11 @@ fn write_history(
             writeln!(
                 output,
                 "{}\t{} bytes\texpires {}\n{}\ndelete: {}\n",
-                entry.filename, entry.size_bytes, entry.expires_at, entry.link, entry.delete_url
+                safe_text(&entry.filename),
+                entry.size_bytes,
+                safe_text(&entry.expires_at),
+                safe_text(&entry.link),
+                safe_text(&entry.delete_url)
             )
             .context("failed to write history")?;
         }

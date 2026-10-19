@@ -77,6 +77,8 @@ export component AppWindow inherits Window {
     in-out property <int> settings-section: 0;
     in-out property <int> shortcut-recording: 0;
 
+    in property <bool> presentation-ready: false;
+    pure callback display-text(string) -> string;
     callback capture-region();
     callback record-region();
     callback capture-screen();
@@ -91,15 +93,15 @@ export component AppWindow inherits Window {
     callback open-last-local();
     callback reveal-last-local();
     callback copy-last-file();
-    callback open-history-link(int);
-    callback copy-history-link(int);
-    callback copy-history-delete(int);
-    callback open-history-local(int);
-    callback reveal-history-local(int);
-    callback copy-history-file(int);
-    callback copy-history-path(int);
-    callback remove-history-entry(int);
-    callback delete-history-local(int);
+    callback open-history-link(string);
+    callback copy-history-link(string);
+    callback copy-history-delete(string);
+    callback open-history-local(string);
+    callback reveal-history-local(string);
+    callback copy-history-file(string);
+    callback copy-history-path(string);
+    callback remove-history-entry(string);
+    callback delete-history-local(string);
     callback history-previous();
     callback history-next();
     callback history-sort-column-clicked(int);
@@ -195,14 +197,14 @@ export component AppWindow inherits Window {
                 recording-hotkey: root.recording-hotkey;
                 screen-hotkey: root.screen-hotkey;
                 clipboard-hotkey: root.clipboard-hotkey;
-                status-text: root.status-text;
-                status-detail: root.status-detail;
-                last-link: root.last-link;
-                last-local-path: root.last-local-path;
+                status-text: root.presentation-ready ? root.display-text(root.status-text) : "";
+                status-detail: root.presentation-ready ? root.display-text(root.status-detail) : "";
+                last-link: root.presentation-ready ? root.display-text(root.last-link) : "";
+                last-local-path: root.presentation-ready ? root.display-text(root.last-local-path) : "";
                 last-delete-url: root.last-delete-url;
                 last-delete-saved: root.last-delete-saved;
                 update-available: root.update-available;
-                update-version: root.update-version;
+                update-version: root.presentation-ready ? root.display-text(root.update-version) : "";
                 capture-region => { root.capture-region(); }
                 record-region => { root.record-region(); }
                 capture-screen => { root.capture-screen(); }
@@ -230,15 +232,15 @@ export component AppWindow inherits Window {
                 has-next: root.history-has-next;
                 sort-column: root.history-sort-column;
                 sort-ascending: root.history-sort-ascending;
-                open-link(index) => { root.open-history-link(index); }
-                copy-link(index) => { root.copy-history-link(index); }
-                copy-delete-link(index) => { root.copy-history-delete(index); }
-                open-local(index) => { root.open-history-local(index); }
-                reveal-local(index) => { root.reveal-history-local(index); }
-                copy-file(index) => { root.copy-history-file(index); }
-                copy-path(index) => { root.copy-history-path(index); }
-                remove-entry(index) => { root.remove-history-entry(index); }
-                delete-local(index) => { root.delete-history-local(index); }
+                open-link(action-token) => { root.open-history-link(action-token); }
+                copy-link(action-token) => { root.copy-history-link(action-token); }
+                copy-delete-link(action-token) => { root.copy-history-delete(action-token); }
+                open-local(action-token) => { root.open-history-local(action-token); }
+                reveal-local(action-token) => { root.reveal-history-local(action-token); }
+                copy-file(action-token) => { root.copy-history-file(action-token); }
+                copy-path(action-token) => { root.copy-history-path(action-token); }
+                remove-entry(action-token) => { root.remove-history-entry(action-token); }
+                delete-local(action-token) => { root.delete-history-local(action-token); }
                 previous-page => { root.history-previous(); }
                 next-page => { root.history-next(); }
                 sort-column-clicked(column) => { root.history-sort-column-clicked(column); }
@@ -278,7 +280,7 @@ export component AppWindow inherits Window {
                 tray-click-action <=> root.tray-click-action;
                 hotkey-status: root.hotkey-status;
                 app-version: root.app-version;
-                update-status: root.update-status;
+                update-status: root.presentation-ready ? root.display-text(root.update-status) : "";
                 update-available: root.update-available;
                 settings-dirty: root.settings-dirty;
                 shortcut-recording <=> root.shortcut-recording;

@@ -1,9 +1,10 @@
 //! Paginated upload-history presentation and row actions.
 
+#[cfg(any(windows, target_os = "macos"))]
+use std::process::Command;
 use std::{
     cell::RefCell,
     path::{Path, PathBuf},
-    process::Command,
     rc::Rc,
 };
 
@@ -14,6 +15,7 @@ use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, VecModel};
 use crate::{AppWindow, HistoryRow};
 use sharer::{
     history::{HistoryEntry, HistorySort, HistorySortColumn, SortDirection},
+    presentation::safe_text,
     storage::PlatformStorage,
 };
 
@@ -23,6 +25,7 @@ pub(crate) type LocalDeletionObserver = Rc<dyn Fn(&AppWindow, i64, &Path)>;
 
 pub(crate) struct HistoryController {
     local_deleted: LocalDeletionObserver,
+    generation: u64,
     page: usize,
     total: u64,
     rows: Rc<VecModel<HistoryRow>>,
@@ -39,6 +42,7 @@ pub(crate) fn initialize(
     let rows = Rc::new(VecModel::default());
     let controller = Rc::new(RefCell::new(HistoryController {
         local_deleted: Rc::clone(local_deleted),
+        generation: 0,
         page: 0,
         total: 0,
         rows: Rc::clone(&rows),
@@ -134,8 +138,8 @@ fn wire_link_callbacks(window: &AppWindow, controller: &Rc<RefCell<HistoryContro
     let window_weak = window.as_weak();
     let controller_for_open = Rc::clone(controller);
 
-    window.on_open_history_link(move |index| {
-        let Some(row) = row_at(&controller_for_open, index) else {
+    window.on_open_history_link(move |action_token| {
+        let Some(row) = row_by_token(&controller_for_open, action_token.as_str()) else {
             return;
         };
 
@@ -153,15 +157,25 @@ fn wire_link_callbacks(window: &AppWindow, controller: &Rc<RefCell<HistoryContro
     let window_weak = window.as_weak();
     let controller_for_copy = Rc::clone(controller);
 
-    window.on_copy_history_link(move |index| {
-        copy_row_value(&window_weak, &controller_for_copy, index, false);
+    window.on_copy_history_link(move |action_token| {
+        copy_row_value(
+            &window_weak,
+            &controller_for_copy,
+            action_token.as_str(),
+            false,
+        );
     });
 
     let window_weak = window.as_weak();
     let controller_for_delete = Rc::clone(controller);
 
-    window.on_copy_history_delete(move |index| {
-        copy_row_value(&window_weak, &controller_for_delete, index, true);
+    window.on_copy_history_delete(move |action_token| {
+        copy_row_value(
+            &window_weak,
+            &controller_for_delete,
+            action_token.as_str(),
+            true,
+        );
     });
 }
 
@@ -169,42 +183,62 @@ fn wire_local_file_callbacks(window: &AppWindow, controller: &Rc<RefCell<History
     let window_weak = window.as_weak();
     let controller_for_open_local = Rc::clone(controller);
 
-    window.on_open_history_local(move |index| {
-        run_local_action(&window_weak, &controller_for_open_local, index, |path| {
-            anyhow::ensure!(path.is_file(), "local capture no longer exists");
-            open::that(path).context("failed to open local capture")?;
-            Ok("Opened local capture".to_owned())
-        });
+    window.on_open_history_local(move |action_token| {
+        run_local_action(
+            &window_weak,
+            &controller_for_open_local,
+            action_token.as_str(),
+            |path| {
+                anyhow::ensure!(path.is_file(), "local capture no longer exists");
+                open::that(path).context("failed to open local capture")?;
+                Ok("Opened local capture".to_owned())
+            },
+        );
     });
 
     let window_weak = window.as_weak();
     let controller_for_reveal = Rc::clone(controller);
 
-    window.on_reveal_history_local(move |index| {
-        run_local_action(&window_weak, &controller_for_reveal, index, |path| {
-            reveal_file(path)?;
-            Ok("Opened capture folder".to_owned())
-        });
+    window.on_reveal_history_local(move |action_token| {
+        run_local_action(
+            &window_weak,
+            &controller_for_reveal,
+            action_token.as_str(),
+            |path| {
+                reveal_file(path)?;
+                Ok("Opened capture folder".to_owned())
+            },
+        );
     });
 
     let window_weak = window.as_weak();
     let controller_for_copy_file = Rc::clone(controller);
 
-    window.on_copy_history_file(move |index| {
-        run_local_action(&window_weak, &controller_for_copy_file, index, |path| {
-            sharer::clipboard::copy_file(path)?;
-            Ok("Local file copied to clipboard".to_owned())
-        });
+    window.on_copy_history_file(move |action_token| {
+        run_local_action(
+            &window_weak,
+            &controller_for_copy_file,
+            action_token.as_str(),
+            |path| {
+                sharer::clipboard::copy_file(path)?;
+                Ok("Local file copied to clipboard".to_owned())
+            },
+        );
     });
 
     let window_weak = window.as_weak();
     let controller_for_copy_path = Rc::clone(controller);
 
-    window.on_copy_history_path(move |index| {
-        run_local_action(&window_weak, &controller_for_copy_path, index, |path| {
-            sharer::clipboard::copy_link(path.to_string_lossy().as_ref())?;
-            Ok("Local path copied to clipboard".to_owned())
-        });
+    window.on_copy_history_path(move |action_token| {
+        run_local_action(
+            &window_weak,
+            &controller_for_copy_path,
+            action_token.as_str(),
+            |path| {
+                sharer::clipboard::copy_link(path.to_string_lossy().as_ref())?;
+                Ok("Local path copied to clipboard".to_owned())
+            },
+        );
     });
 }
 
@@ -218,8 +252,8 @@ fn wire_removal_callbacks(
     let storage_for_remove = Rc::clone(storage);
     let controller_for_remove = Rc::clone(controller);
 
-    window.on_remove_history_entry(move |index| {
-        let Some(row) = row_at(&controller_for_remove, index) else {
+    window.on_remove_history_entry(move |action_token| {
+        let Some(row) = row_by_token(&controller_for_remove, action_token.as_str()) else {
             return;
         };
         let Some(window) = window_weak.upgrade() else {
@@ -245,8 +279,8 @@ fn wire_removal_callbacks(
     let controller_for_delete_local = Rc::clone(controller);
     let local_deleted_for_callback = Rc::clone(local_deleted);
 
-    window.on_delete_history_local(move |index| {
-        let Some(row) = row_at(&controller_for_delete_local, index) else {
+    window.on_delete_history_local(move |action_token| {
+        let Some(row) = row_by_token(&controller_for_delete_local, action_token.as_str()) else {
             return;
         };
         let Some(window) = window_weak.upgrade() else {
@@ -263,8 +297,8 @@ fn wire_removal_callbacks(
         match delete_local_capture(
             &row,
             DeleteLocalCallbacks {
-                mark_deleted: |id, path: &Path| {
-                    clear_local_row(&controller_for_delete_local, index);
+                mark_deleted: |id: i64, path: &Path| {
+                    clear_local_row(&controller_for_delete_local, &id.to_string());
                     local_deleted_for_callback(&window, id, path);
                 },
                 clear_persisted: |id| storage_for_delete_local.clear_history_local_path(id),
@@ -360,8 +394,17 @@ fn refresh_with_sort(
     notify_reconciled_local_deletions(&original_local_paths, &entries, |id, path| {
         local_deleted(window, id, path);
     });
-    let rows = entries.iter().map(row_from_entry).collect::<Vec<_>>();
     let mut controller = controller.borrow_mut();
+    let generation = controller
+        .generation
+        .checked_add(1)
+        .context("history view generation exhausted")?;
+    let rows = entries
+        .iter()
+        .map(|entry| row_from_entry(entry, generation))
+        .collect::<Vec<_>>();
+
+    controller.generation = generation;
 
     controller.page = page;
     controller.total = total;
@@ -440,22 +483,29 @@ fn page_count(total: u64) -> usize {
     total.max(1).div_ceil(PAGE_SIZE)
 }
 
-fn row_at(controller: &RefCell<HistoryController>, index: i32) -> Option<HistoryRow> {
-    usize::try_from(index)
-        .ok()
-        .and_then(|index| controller.borrow().rows.row_data(index))
+fn row_by_token(controller: &RefCell<HistoryController>, action_token: &str) -> Option<HistoryRow> {
+    controller
+        .borrow()
+        .rows
+        .iter()
+        .find(|row| row.action_token == action_token)
 }
 
-fn clear_local_row(controller: &RefCell<HistoryController>, index: i32) {
-    let Ok(index) = usize::try_from(index) else {
+fn clear_local_row(controller: &RefCell<HistoryController>, entry_id: &str) {
+    let controller = controller.borrow();
+    let Some(index) = controller
+        .rows
+        .iter()
+        .position(|row| row.entry_id == entry_id)
+    else {
         return;
     };
-    let controller = controller.borrow();
     let Some(mut row) = controller.rows.row_data(index) else {
         return;
     };
 
     row.local_path = SharedString::new();
+    row.display_local_path = SharedString::new();
     controller.rows.set_row_data(index, row);
 }
 
@@ -497,10 +547,10 @@ fn remove_local_file(path: &Path) -> Result<()> {
 fn copy_row_value(
     window: &slint::Weak<AppWindow>,
     controller: &RefCell<HistoryController>,
-    index: i32,
+    action_token: &str,
     delete_link: bool,
 ) {
-    let Some(row) = row_at(controller, index) else {
+    let Some(row) = row_by_token(controller, action_token) else {
         return;
     };
     let (value, description) = if delete_link {
@@ -525,17 +575,20 @@ fn copy_row_value(
     }
 }
 
-fn row_from_entry(entry: &HistoryEntry) -> HistoryRow {
+fn row_from_entry(entry: &HistoryEntry, generation: u64) -> HistoryRow {
     HistoryRow {
+        action_token: format!("{generation}:{}", entry.id).into(),
         entry_id: entry.id.to_string().into(),
         created: format_created_at(entry.created_at).into(),
-        filename: entry.filename.as_str().into(),
+        filename: safe_text(&entry.filename).as_ref().into(),
         size: format_size(entry.size_bytes).into(),
         expires: if entry.expires_at.is_empty() {
             "Local only".into()
         } else {
-            entry.expires_at.as_str().into()
+            safe_text(&entry.expires_at).as_ref().into()
         },
+        display_link: safe_text(&entry.link).as_ref().into(),
+        display_local_path: safe_text(&entry.local_path).as_ref().into(),
         link: entry.link.as_str().into(),
         delete_link: entry.delete_url.as_str().into(),
         local_path: entry.local_path.as_str().into(),
@@ -561,10 +614,10 @@ fn format_created_at(timestamp: i64) -> String {
 fn run_local_action(
     window: &slint::Weak<AppWindow>,
     controller: &RefCell<HistoryController>,
-    index: i32,
+    action_token: &str,
     action: impl FnOnce(&Path) -> Result<String>,
 ) {
-    let Some(row) = row_at(controller, index) else {
+    let Some(row) = row_by_token(controller, action_token) else {
         return;
     };
     let result = local_path(&row).and_then(|path| action(&path));
@@ -823,3 +876,6 @@ mod tests {
         assert_eq!(*notified.borrow(), vec![(1, missing)]);
     }
 }
+
+#[cfg(test)]
+mod presentation_tests;

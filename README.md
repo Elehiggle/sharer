@@ -147,6 +147,8 @@ ShareR --history --history-limit 5 --json
 ShareR --renderer software
 ```
 
+Successful uploads print the complete public URL using standard URL encoding. History and status displays escape control and bidirectional formatting characters and shorten very long fields. Use `--history --json` for complete original values; copy and open actions use the original links and paths.
+
 The desktop defaults to the platform's preferred renderer. Use `--renderer gpu` to require it or `--renderer software` if the GPU renderer is unavailable or misbehaves. `auto` continues to honor Slint's renderer environment overrides.
 
 Run `ShareR --help` for every option.
