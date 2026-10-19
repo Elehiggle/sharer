@@ -158,7 +158,7 @@ impl UploadTarget {
             canonical_uploader_endpoint(&self.custom_url)?
         };
 
-        self.header_name = name.trim().to_owned();
+        name.trim().clone_into(&mut self.header_name);
         value.clone_into(&mut self.header_value);
         self.header_endpoint = endpoint;
         Ok(())
