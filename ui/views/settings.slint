@@ -263,7 +263,7 @@ export component SettingsView inherits Rectangle {
                         VerticalLayout {
                             padding: 10px; spacing: 5px;
                             CheckBox { text: "Remove identifying image metadata"; checked <=> root.remove-exif;
-                                Tooltip { text: "Remove EXIF, ordinary XMP, IPTC, comments, and PNG text from JPEG, PNG, and WebP. Preserve color profiles and recognized HDR gain maps. Unsupported mixed HDR metadata blocks the upload."; }
+                                Tooltip { text: @markdown("Remove EXIF, ordinary XMP, IPTC, comments, and PNG text from JPEG, PNG, and WebP. Preserve color profiles and recognized HDR gain maps. Unsupported mixed HDR metadata blocks the upload."); }
                             }
                             Rectangle { height: 1px; background: Theme.border; }
                             FormRow { label: "File name"; label-width: root.label-width;
