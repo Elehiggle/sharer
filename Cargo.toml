@@ -58,6 +58,7 @@ num-traits = { version = "0.2", optional = true }
 open = { version = "5", optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+roxmltree = "0.21.1"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "fallible_uint"] }
 semver = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -65,6 +66,7 @@ serde_json = "1"
 socket2 = "0.6.1"
 tokio = { version = "1", features = ["rt", "time"] }
 slint = { version = "1.15.1", default-features = false, features = ["accessibility", "backend-winit", "compat-1-2", "renderer-software", "std", "unstable-winit-030"], optional = true }
+tempfile = "3.27"
 thiserror = "2"
 tray-icon = { version = "0.22.0", default-features = false, optional = true }
 url = "2"
@@ -98,7 +100,6 @@ core-graphics = { version = "0.23.2", default-features = false, features = ["lin
 reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "multipart", "native-tls", "socks", "stream", "system-proxy"] }
 screencapturekit = { version = "8.0.1", default-features = false, features = ["macos_14_0"], optional = true }
 slint = { version = "1.15.1", default-features = false, features = ["renderer-skia"], optional = true }
-tempfile = "3.27"
 
 [build-dependencies]
 slint-build = { version = "1.15.1", optional = true }

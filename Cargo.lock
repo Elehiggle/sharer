@@ -6122,6 +6122,7 @@ dependencies = [
  "reqwest",
  "rfd",
  "rodio",
+ "roxmltree",
  "rusqlite",
  "rustls",
  "screencapturekit",

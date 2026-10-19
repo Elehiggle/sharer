@@ -28,7 +28,7 @@ use crate::validate_lifetime;
 mod metadata;
 mod providers;
 
-use metadata::{MetadataFormat, load_and_strip_exif, strip_exif_in_place};
+use metadata::{sniff, sniff_reader, strip_in_place, strip_to_file};
 
 pub use providers::UploaderKind;
 
@@ -314,37 +314,51 @@ impl UploadPayload {
         Ok(payload)
     }
 
-    /// Remove EXIF chunks from JPEG, PNG, and WebP payloads without recompressing pixels.
+    /// Remove identifying EXIF, XMP, IPTC, comments, and PNG text without recompressing pixels.
     ///
-    /// File-backed images remain streamed when they do not contain EXIF metadata.
+    /// JPEG, PNG, and WebP are detected from their bytes, including renamed images.
+    /// Color profiles and recognized HDR rendering metadata are retained. Mixed HDR XMP
+    /// that cannot safely be separated is rejected. File/reader payloads stay streamed.
     ///
     /// # Errors
     ///
-    /// Returns an error when a supported image is malformed or cannot be read.
+    /// Returns an error when a supported image is malformed or cannot be safely cleaned.
     pub fn remove_exif(&mut self) -> Result<()> {
-        let format = match self.mime.as_str() {
-            "image/jpeg" => MetadataFormat::Jpeg,
-            "image/png" => MetadataFormat::Png,
-            "image/webp" => MetadataFormat::Webp,
-            _ => return Ok(()),
+        let claimed_image = matches!(
+            self.mime.as_str(),
+            "image/jpeg" | "image/png" | "image/webp"
+        );
+        let format = match &mut self.body {
+            PayloadBody::Bytes(bytes) => sniff(bytes),
+            PayloadBody::File { file, length } => sniff_reader(file, *length)?,
+            PayloadBody::Reader { reader, length } => sniff_reader(reader.as_mut(), *length)?,
+        };
+        let Some(format) = format else {
+            anyhow::ensure!(
+                !claimed_image,
+                "image signature does not match a supported image container"
+            );
+            return Ok(());
         };
         let stripped_body = match &mut self.body {
             PayloadBody::Bytes(bytes) => {
-                strip_exif_in_place(bytes, format)?;
+                strip_in_place(bytes, format)?;
                 None
             }
-
-            PayloadBody::File { file, length } => load_and_strip_exif(file, *length, format)?,
-
+            PayloadBody::File { file, length } => strip_to_file(file, *length, format)?,
             PayloadBody::Reader { reader, length } => {
-                load_and_strip_exif(reader.as_mut(), *length, format)?
+                strip_to_file(reader.as_mut(), *length, format)?
             }
         };
-
-        if let Some(bytes) = stripped_body {
-            self.body = PayloadBody::Bytes(bytes);
+        if self.mime != format.mime() {
+            self.mime = format.mime().to_owned();
         }
-
+        if let Some((reader, length)) = stripped_body {
+            self.body = PayloadBody::Reader {
+                reader: Box::new(reader),
+                length,
+            };
+        }
         Ok(())
     }
 
