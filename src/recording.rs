@@ -1,18 +1,25 @@
 //! Region recording into a self-contained animated WebP.
 
 use std::{
+    io::{Seek, Write},
     sync::mpsc::{Receiver, RecvTimeoutError},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
 use sharer::{
-    capture::{DesktopRegion, RegionCapturer},
+    capture::{DesktopRegion, RegionCapturer, recording_frame_bytes},
     config::CaptureResolution,
     upload::UploadPayload,
     validate_recording_fps,
 };
 use webp_animation::{Encoder, EncoderOptions, EncodingConfig};
+
+mod webp;
+
+use webp::WebpWriter;
+
+const MAX_RECORDING_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RecordingSettings {
@@ -21,42 +28,68 @@ pub(super) struct RecordingSettings {
     pub(super) capture_resolution: CaptureResolution,
 }
 
+pub(super) struct RecordedCapture {
+    pub(super) payload: UploadPayload,
+    pub(super) warning: Option<String>,
+}
+
 pub(super) fn capture_region(
     region: DesktopRegion,
     stop: &Receiver<()>,
     filename_stem: &str,
     settings: RecordingSettings,
     now: fn() -> Instant,
-) -> Result<UploadPayload> {
+) -> Result<RecordedCapture> {
+    validate_recording_fps(settings.frames_per_second)?;
+    sharer::validate_recording_seconds(settings.max_seconds)?;
+
+    let capturer = RegionCapturer::new(region, settings.capture_resolution)?;
+    let output = tempfile::tempfile().context("failed to create a temporary recording file")?;
+    let writer = WebpWriter::new(output, capturer.dimensions(), MAX_RECORDING_BYTES)?;
+    let animation = record_frames(writer, stop, settings, now, || capturer.capture_rgba())?;
+    let warning = animation
+        .stopped_at_limit
+        .then(|| "recording stopped at the 256 MiB file limit".to_owned());
+
+    Ok(RecordedCapture {
+        payload: UploadPayload::from_reader(
+            animation.output,
+            animation.length,
+            format!("{filename_stem}-recording.webp"),
+            "image/webp".to_owned(),
+        ),
+        warning,
+    })
+}
+
+struct RecordedAnimation<W> {
+    output: W,
+    length: u64,
+    stopped_at_limit: bool,
+}
+
+fn record_frames<W: Write + Seek>(
+    mut writer: WebpWriter<W>,
+    stop: &Receiver<()>,
+    settings: RecordingSettings,
+    mut now: impl FnMut() -> Instant,
+    mut capture: impl FnMut() -> Result<Vec<u8>>,
+) -> Result<RecordedAnimation<W>> {
     let RecordingSettings {
         frames_per_second,
         max_seconds,
-        capture_resolution,
+        capture_resolution: _,
     } = settings;
-
-    validate_recording_fps(frames_per_second)?;
-    sharer::validate_recording_seconds(max_seconds)?;
-
+    let dimensions = writer.dimensions();
+    let frame_bytes = recording_frame_bytes(dimensions)?;
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(frames_per_second));
-    let capturer = RegionCapturer::new(region, capture_resolution)?;
-    let dimensions = capturer.dimensions();
-
-    anyhow::ensure!(
-        dimensions.0 <= 16_383 && dimensions.1 <= 16_383,
-        "recording region exceeds WebP's 16383-pixel dimension limit"
-    );
-    let options = EncoderOptions {
-        encoding_config: Some(EncodingConfig::new_lossy(80.0)),
-        ..EncoderOptions::default()
-    };
-    let mut encoder = Encoder::new_with_options(dimensions, options)
-        .context("failed to initialize the WebP recorder")?;
     let started = now();
     let deadline = started
         .checked_add(Duration::from_secs(u64::from(max_seconds)))
         .context("recording duration is too long")?;
     let mut next_frame = started;
     let mut last_timestamp: Option<i32> = None;
+    let mut stopped_at_limit = false;
 
     loop {
         let current_time = now();
@@ -75,20 +108,28 @@ pub(super) fn capture_region(
 
             None => elapsed_timestamp,
         };
-        let image = capturer
-            .capture_rgba()
-            .context("failed to capture a recording frame")?;
+        let image = capture().context("failed to capture a recording frame")?;
 
         anyhow::ensure!(
-            image.len()
-                == usize::try_from(dimensions.0)?
-                    .saturating_mul(usize::try_from(dimensions.1)?)
-                    .saturating_mul(4),
+            image.len() == frame_bytes,
             "screen capture returned an unexpected recording size"
         );
-        encoder
-            .add_frame(&image, timestamp)
-            .context("failed to encode a recording frame")?;
+        // Each encoder sees one bounded frame. Completed frames live in the temporary
+        // file, so neither encoding nor finalization retains the entire recording.
+        let data = encode_frame(dimensions, &image)?;
+
+        drop(image);
+
+        if !writer.add_frame(&data, timestamp)? {
+            anyhow::ensure!(
+                last_timestamp.is_some(),
+                "recording frame exceeds the file limit"
+            );
+            stopped_at_limit = true;
+
+            break;
+        }
+
         last_timestamp = Some(timestamp);
 
         next_frame = next_frame
@@ -114,17 +155,34 @@ pub(super) fn capture_region(
             .checked_add(1)
             .context("recording duration is too long")?,
     );
-    let data = encoder
-        .finalize(final_timestamp)
-        .context("failed to finish the WebP recording")?;
-    let length = u64::try_from(data.len()).context("recording is too large")?;
+    let (output, length) = writer.finish(final_timestamp)?;
 
-    Ok(UploadPayload::from_reader(
-        std::io::Cursor::new(data),
+    Ok(RecordedAnimation {
+        output,
         length,
-        format!("{filename_stem}-recording.webp"),
-        "image/webp".to_owned(),
-    ))
+        stopped_at_limit,
+    })
+}
+
+fn encode_frame(dimensions: (u32, u32), image: &[u8]) -> Result<webp_animation::WebPData> {
+    // Enforce the bound before the native encoder allocates its canvas and scratch buffers.
+    anyhow::ensure!(
+        image.len() == recording_frame_bytes(dimensions)?,
+        "screen capture returned an unexpected recording size"
+    );
+    let options = EncoderOptions {
+        encoding_config: Some(EncodingConfig::new_lossy(80.0)),
+        ..EncoderOptions::default()
+    };
+    let mut encoder = Encoder::new_with_options(dimensions, options)
+        .context("failed to initialize the WebP recorder")?;
+
+    encoder
+        .add_frame(image, 0)
+        .context("failed to encode a recording frame")?;
+    encoder
+        .finalize(1)
+        .context("failed to finish a recording frame")
 }
 
 fn duration_timestamp(elapsed: Duration) -> Result<i32> {
@@ -134,18 +192,4 @@ fn duration_timestamp(elapsed: Duration) -> Result<i32> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::duration_timestamp;
-
-    #[test]
-    fn timestamps_use_real_elapsed_milliseconds() {
-        assert_eq!(duration_timestamp(Duration::ZERO).unwrap(), 0);
-        assert_eq!(
-            duration_timestamp(Duration::from_micros(16_999)).unwrap(),
-            16
-        );
-        assert_eq!(duration_timestamp(Duration::from_secs(1)).unwrap(), 1_000);
-    }
-}
+mod tests;

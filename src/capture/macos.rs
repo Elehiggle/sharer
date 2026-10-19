@@ -23,7 +23,7 @@ use screencapturekit::{
 
 use super::{
     CaptureColorMode, CapturedScreen, DesktopBounds, DesktopRegion, WindowRegion,
-    bounded_selector_preview, encode_sdr_png, intersect_bounds, resize_rgba,
+    bounded_selector_preview, encode_sdr_png, intersect_bounds, recording_frame_bytes, resize_rgba,
 };
 use crate::config::{CaptureResolution, ResizeQuality};
 use crate::upload::UploadPayload;
@@ -125,6 +125,7 @@ impl RegionCapturer {
 
             CaptureResolution::Logical => (region.width(), region.height()),
         };
+        recording_frame_bytes((width, height))?;
         let local_x = region.x().saturating_sub(prepared.desktop_bounds.x);
         let local_y = region.y().saturating_sub(prepared.desktop_bounds.y);
         let source_rect = CGRect::new(

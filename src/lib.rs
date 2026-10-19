@@ -15,7 +15,7 @@ pub const MAX_LIFETIME_SECONDS: u32 = 7 * 24 * 60 * 60;
 pub const MIN_RECORDING_FPS: u32 = 1;
 /// Fastest supported region recording frame rate.
 pub const MAX_RECORDING_FPS: u32 = 60;
-/// Longest supported region recording, preventing unattended memory growth.
+/// Longest supported region recording; frame and output byte limits apply separately.
 pub const MAX_RECORDING_SECONDS: u32 = 3_600;
 /// Default maximum duration of one region recording.
 pub const DEFAULT_RECORDING_SECONDS: u32 = 300;

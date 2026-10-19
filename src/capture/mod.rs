@@ -277,6 +277,7 @@ impl RegionCapturer {
     /// Returns an error when the region does not fit on an available monitor.
     pub fn new(region: DesktopRegion, capture_resolution: CaptureResolution) -> Result<Self> {
         let _ = capture_resolution;
+        recording_frame_bytes((region.width, region.height))?;
         let monitor = xcap::Monitor::from_point(region.x, region.y)
             .context("failed to find the recording display")?;
         let monitor_x = monitor.x().context("failed to read display position")?;
@@ -320,6 +321,37 @@ impl RegionCapturer {
     pub const fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+}
+
+/// Validate recording dimensions before allocating native capture or encoder buffers.
+///
+/// Each tightly packed RGBA frame is limited to 32 MiB, which permits UHD (3840 × 2160)
+/// capture. Native capture and codec scratch buffers also scale with this bounded frame
+/// size; this is not a guarantee about the process's total resident memory.
+///
+/// # Errors
+///
+/// Returns an error for empty, oversized, or unsupported WebP frame dimensions.
+pub fn recording_frame_bytes(dimensions: (u32, u32)) -> Result<usize> {
+    anyhow::ensure!(
+        dimensions.0 > 0 && dimensions.1 > 0,
+        "recording region must have positive dimensions"
+    );
+    anyhow::ensure!(
+        dimensions.0 <= 16_383 && dimensions.1 <= 16_383,
+        "recording region exceeds WebP's 16383-pixel dimension limit"
+    );
+    let bytes = u64::from(dimensions.0)
+        .checked_mul(u64::from(dimensions.1))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .context("recording region is too large")?;
+
+    anyhow::ensure!(
+        bytes <= 32 * 1024 * 1024,
+        "recording region exceeds the 32 MiB frame limit; select a smaller region or logical resolution"
+    );
+
+    usize::try_from(bytes).context("recording region is too large")
 }
 
 impl DesktopRegion {

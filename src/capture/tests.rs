@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn recording_frame_budget_is_checked_in_physical_pixels() {
+    assert_eq!(recording_frame_bytes((3840, 2160)).unwrap(), 33_177_600);
+    assert_eq!(
+        recording_frame_bytes((4096, 2048)).unwrap(),
+        32 * 1024 * 1024
+    );
+    assert!(recording_frame_bytes((4096, 2049)).is_err());
+    assert!(recording_frame_bytes((5120, 2880)).is_err());
+    assert!(recording_frame_bytes((0, 1)).is_err());
+    assert!(recording_frame_bytes((1, 0)).is_err());
+    assert!(recording_frame_bytes((u32::MAX, u32::MAX)).is_err());
+    assert!(recording_frame_bytes((16_383, 16_383)).is_err());
+}
+
+#[test]
 fn every_resize_quality_produces_the_requested_dimensions() {
     let image = RgbaImage::from_fn(7, 5, |x, y| {
         image::Rgba([
