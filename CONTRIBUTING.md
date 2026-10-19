@@ -88,21 +88,22 @@ Linux uses xcap under X11 and screenshot portals under supported Wayland composi
 
 These are tested boundaries, not aspirations:
 
-| Operation                                   | Boundary                                                                                           |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Validate an upload lifetime                 | 0 allocations                                                                                      |
-| Hand an owned 4 MiB capture to the uploader | 0 allocations                                                                                      |
-| Wrap an owned 4 MiB recording for upload    | 1 allocation under 128 bytes, buffer is not copied                                                 |
-| Record an animated WebP                     | One frame at a time; RGBA input at most 32 MiB, encoded output at most 256 MiB in a temporary file |
-| Prepare a sparse 64 MiB file for streaming  | Less than 16 KiB allocated                                                                         |
-| Stream a 16 MiB multipart upload            | Peak heap below 2 MiB                                                                              |
-| Move a receipt into history                 | 0 allocations                                                                                      |
-| Read an uploader response                   | Hard limit of 64 KiB                                                                               |
-| Publish upload progress                     | At most 101 observations                                                                           |
-| SQLite page cache                           | 512 KiB target                                                                                     |
-| Render upload history                       | 25 entries per page                                                                                |
+| Operation                                   | Boundary                                           |
+| ------------------------------------------- | -------------------------------------------------- |
+| Validate an upload lifetime                 | 0 allocations                                      |
+| Hand an owned 4 MiB capture to the uploader | 0 allocations                                      |
+| Wrap an owned 4 MiB recording for upload    | 1 allocation under 128 bytes, buffer is not copied |
+| Prepare a sparse 64 MiB file for streaming  | Less than 16 KiB allocated                         |
+| Stream a 16 MiB multipart upload            | Peak heap below 2 MiB                              |
+| Move a receipt into history                 | 0 allocations                                      |
+| Read an uploader response                   | Hard limit of 64 KiB                               |
+| Publish upload progress                     | At most 101 observations                           |
+| SQLite page cache                           | 512 KiB target                                     |
+| Render upload history                       | 25 entries per page                                |
 
 Closing to the tray drops the Slint component and rendered history model. Allocator and operating-system working-set pages may remain resident after those objects are freed.
+
+Animated recording encodes one bounded frame at a time into a temporary file. RGBA input is limited to 32 MiB per frame, and encoded output is limited to 256 MiB; this does not promise a fixed process RSS ceiling.
 
 ## UI screenshots
 
