@@ -213,16 +213,87 @@ fn endpoint_changes_drop_old_headers_and_explicit_headers_authorize_the_new_targ
 }
 
 #[test]
-fn uploader_endpoints_reject_embedded_credentials() {
-    for endpoint in [
-        "https://user@uploads.example/upload",
-        "https://user:fake-secret@uploads.example/upload",
-        "https://:fake-secret@uploads.example/upload",
-    ] {
-        let error = validate_uploader_url(endpoint).unwrap_err();
+fn basic_auth_endpoints_upload_without_forwarding_credentials_on_redirects() {
+    for status in [200, 302] {
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        let destination_url = format!("http://{}/receive", destination.local_addr().unwrap());
 
-        assert!(!format!("{error:#}").contains("fake-secret"));
-        assert!(UploadClient::new(endpoint, &UploadRoute::Direct, None).is_err());
+        destination.set_nonblocking(true).unwrap();
+        let source = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!(
+            "http://fake-user:fake-password@{}/upload",
+            source.local_addr().unwrap()
+        );
+        let server = thread::spawn(move || {
+            let (mut stream, _) = source.accept().unwrap();
+
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let headers = read_upload_request(&mut stream);
+            let body = if status == 200 {
+                r#"{"data":{"originalName":"sample.bin","size":3,"link":"https://files.example/sample.bin","deleteLink":"","expiresAt":"soon"}}"#
+            } else {
+                ""
+            };
+            let response = format!(
+                "HTTP/1.1 {status} Test\r\nLocation: {destination_url}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+
+            stream.write_all(response.as_bytes()).unwrap();
+            headers
+        });
+        let client = UploadClient::new(
+            &endpoint,
+            &UploadRoute::Direct,
+            Some(("X-Api-Key", "fake-upload-secret")),
+        )
+        .unwrap();
+        let result = client.upload(small_payload(), 60);
+
+        if status == 200 {
+            assert_eq!(result.unwrap().link, "https://files.example/sample.bin");
+        } else {
+            assert!(result.is_err());
+        }
+
+        let headers = server.join().unwrap().to_ascii_lowercase();
+
+        assert!(headers.contains("authorization: basic zmfrzs11c2vyomzha2utcgfzc3dvcmq="));
+        assert!(headers.contains("x-api-key: fake-upload-secret"));
+        assert_eq!(
+            destination.accept().unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn account_changes_on_the_same_endpoint_require_custom_header_authorization() {
+    let mut target = UploadTarget {
+        custom_url: "https://fake-user:fake-password@uploads.example/upload".to_owned(),
+        ..UploadTarget::default()
+    };
+
+    target
+        .authorize_custom_header("X-Api-Key", "fake-secret")
+        .unwrap();
+    assert!(target.validate().is_ok());
+
+    for endpoint in [
+        "https://other-user:fake-password@uploads.example/upload",
+        "https://fake-user:other-password@uploads.example/upload",
+        "https://uploads.example/upload",
+    ] {
+        let mut changed = target.clone();
+
+        endpoint.clone_into(&mut changed.custom_url);
+        assert!(changed.validate().is_err());
+        changed.set_custom_url(endpoint).unwrap();
+        assert!(changed.header_name.is_empty());
+        assert!(changed.header_value.is_empty());
+        assert!(changed.validate().is_ok());
     }
 }
 

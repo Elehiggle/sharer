@@ -16,8 +16,6 @@ The header value is stored in ShareR's private per-user database. It is never wr
 
 Headers are bound to the endpoint where they were configured, including its scheme, host, port, path, and query parameters. Equivalent URL spellings (such as the default HTTPS port) share the same binding; fragments are ignored. Changing the endpoint clears the old header. Re-enter the header to authorize it for the new endpoint. Existing saved headers are bound to their existing endpoint when loaded after upgrading.
 
-Endpoint URLs must not contain a username or password. Use the optional request header for authentication.
-
 ## Request
 
 ShareR sends an HTTP `POST` with the file in a multipart field named `file`. The configured lifetime is added as a `time` query parameter in seconds. Existing unrelated query parameters are preserved.

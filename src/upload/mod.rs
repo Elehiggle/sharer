@@ -131,7 +131,7 @@ impl UploadTarget {
     ///
     /// # Errors
     ///
-    /// Returns an error when the new endpoint is not an HTTP(S) URL without userinfo.
+    /// Returns an error when the new endpoint is not an HTTP(S) URL.
     pub fn set_custom_url(&mut self, endpoint: &str) -> Result<()> {
         let endpoint = canonical_uploader_endpoint(endpoint)?;
 
@@ -957,11 +957,6 @@ fn parse_uploader_url(endpoint: &str) -> Result<Url> {
         matches!(url.scheme(), "http" | "https") && url.host().is_some(),
         "uploader URL must be an absolute HTTP or HTTPS URL"
     );
-    anyhow::ensure!(
-        url.username().is_empty() && url.password().is_none(),
-        "uploader URL must not contain userinfo; use an explicit request header"
-    );
-
     Ok(url)
 }
 
@@ -969,7 +964,7 @@ fn parse_uploader_url(endpoint: &str) -> Result<Url> {
 ///
 /// # Errors
 ///
-/// Returns an error for invalid HTTP(S) endpoints or embedded userinfo.
+/// Returns an error for invalid HTTP(S) endpoints.
 pub fn canonical_uploader_endpoint(endpoint: &str) -> Result<String> {
     let mut url = parse_uploader_url(endpoint)?;
 
