@@ -28,6 +28,7 @@ export component AppWindow inherits Window {
     in-out property <string> sul-credential: "";
     in-out property <string> upload-header-name: "";
     in-out property <string> upload-header-value: "";
+    in-out property <string> upload-header-endpoint: "";
     in-out property <bool> busy: false;
     in-out property <bool> uploading: false;
     in-out property <float> upload-progress: 0;
@@ -106,6 +107,8 @@ export component AppWindow inherits Window {
     callback open-update();
     callback save-settings();
     callback settings-edited();
+    callback custom-endpoint-edited();
+    callback custom-header-edited();
     callback shortcut-recording-started();
     callback shortcut-recording-finished();
 
@@ -254,6 +257,8 @@ export component AppWindow inherits Window {
                 sul-credential <=> root.sul-credential;
                 upload-header-name <=> root.upload-header-name;
                 upload-header-value <=> root.upload-header-value;
+                custom-endpoint-edited => { root.custom-endpoint-edited(); }
+                custom-header-edited => { root.custom-header-edited(); }
                 lifetime-seconds <=> root.lifetime-seconds;
                 recording-fps <=> root.recording-fps;
                 recording-max-seconds <=> root.recording-max-seconds;

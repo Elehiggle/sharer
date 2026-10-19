@@ -73,6 +73,159 @@ fn small_payload() -> UploadPayload {
     )
 }
 
+fn read_upload_request(mut stream: impl Read) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+
+    loop {
+        let count = stream.read(&mut buffer).unwrap();
+
+        assert_ne!(count, 0, "request ended before its multipart body");
+        request.extend_from_slice(&buffer[..count]);
+
+        if let Some(boundary) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+            let headers = String::from_utf8_lossy(&request[..boundary]);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .expect("test payload should have a known multipart length");
+
+            if request.len() >= boundary + 4 + length {
+                return headers.into_owned();
+            }
+        }
+    }
+}
+
+#[test]
+fn upload_redirects_never_send_headers_or_requests_to_another_origin() {
+    for status in [301, 302, 303, 307, 308] {
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        let destination_url = format!("http://{}/receive", destination.local_addr().unwrap());
+
+        destination.set_nonblocking(true).unwrap();
+        let source = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/upload", source.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = source.accept().unwrap();
+
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let headers = read_upload_request(&mut stream);
+            let response = format!(
+                "HTTP/1.1 {status} Redirect\r\nLocation: {destination_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+
+            stream.write_all(response.as_bytes()).unwrap();
+            headers
+        });
+        let client = UploadClient::new(
+            &endpoint,
+            &UploadRoute::Direct,
+            Some(("X-Api-Key", "fake-upload-secret")),
+        )
+        .unwrap();
+
+        assert!(
+            client.upload(small_payload(), 60).is_err(),
+            "status {status}"
+        );
+        let headers = server.join().unwrap().to_ascii_lowercase();
+
+        assert!(headers.contains("x-api-key: fake-upload-secret"));
+        assert!(!headers.contains("referer:"));
+        assert_eq!(
+            destination.accept().unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn custom_header_binding_covers_the_entire_normalized_endpoint() {
+    let mut target = UploadTarget {
+        custom_url: "HTTPS://Uploads.Example:443/a/../upload?mode=private#display".to_owned(),
+        ..UploadTarget::default()
+    };
+
+    target
+        .authorize_custom_header("X-Api-Key", "fake-secret")
+        .unwrap();
+    assert_eq!(
+        target.header_endpoint,
+        "https://uploads.example/upload?mode=private"
+    );
+    assert!(target.validate().is_ok());
+
+    for endpoint in [
+        "http://uploads.example/upload?mode=private",
+        "https://other.example/upload?mode=private",
+        "https://uploads.example:8443/upload?mode=private",
+        "https://uploads.example/other?mode=private",
+        "https://uploads.example/upload?mode=public",
+    ] {
+        let mut changed = target.clone();
+
+        endpoint.clone_into(&mut changed.custom_url);
+        assert!(changed.validate().is_err(), "{endpoint}");
+        assert!(UploadClient::for_target(&changed, &UploadRoute::Direct).is_err());
+    }
+
+    target.custom_url = "https://uploads.example/upload?mode=private#another".to_owned();
+    assert!(target.validate().is_ok());
+    assert!(!format!("{target:?}").contains("fake-secret"));
+}
+
+#[test]
+fn endpoint_changes_drop_old_headers_and_explicit_headers_authorize_the_new_target() {
+    let mut target = UploadTarget {
+        custom_url: "https://uploads.example/upload".to_owned(),
+        ..UploadTarget::default()
+    };
+
+    target
+        .authorize_custom_header("X-Api-Key", "fake-old-secret")
+        .unwrap();
+    let queued = target.clone();
+
+    target
+        .set_custom_url("https://other.example/upload")
+        .unwrap();
+    assert!(target.header_name.is_empty());
+    assert!(target.header_value.is_empty());
+    assert!(target.header_endpoint.is_empty());
+    assert!(target.validate().is_ok());
+    assert_eq!(queued.custom_url, "https://uploads.example/upload");
+    assert_eq!(queued.header_value, "fake-old-secret");
+    assert!(queued.validate().is_ok());
+
+    target
+        .authorize_custom_header("X-Api-Key", "fake-new-secret")
+        .unwrap();
+    assert_eq!(target.header_endpoint, "https://other.example/upload");
+    assert!(target.validate().is_ok());
+}
+
+#[test]
+fn uploader_endpoints_reject_embedded_credentials() {
+    for endpoint in [
+        "https://user@uploads.example/upload",
+        "https://user:fake-secret@uploads.example/upload",
+        "https://:fake-secret@uploads.example/upload",
+    ] {
+        let error = validate_uploader_url(endpoint).unwrap_err();
+
+        assert!(!format!("{error:#}").contains("fake-secret"));
+        assert!(UploadClient::new(endpoint, &UploadRoute::Direct, None).is_err());
+    }
+}
+
 #[test]
 fn lifetime_is_appended_as_seconds() {
     let endpoint = Url::parse("https://uploads.example/upload?source=desktop").unwrap();

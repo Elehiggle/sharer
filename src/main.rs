@@ -260,10 +260,10 @@ fn initialized_upload_target(
     let mut target = config.upload_target_for(kind);
 
     if kind == UploaderKind::Custom && initializer.contains("://") {
-        initializer.trim().clone_into(&mut target.custom_url);
+        target.set_custom_url(initializer)?;
     }
 
-    apply_cli_upload_overrides(&mut target, cli);
+    apply_cli_upload_overrides(&mut target, cli)?;
     target.validate()?;
     Ok(target)
 }
@@ -275,23 +275,28 @@ fn upload_target_for_command(cli: &Cli, config: &AppConfig) -> Result<UploadTarg
     if let Some(endpoint) = &cli.uploader_url {
         target.kind = UploaderKind::Custom;
         target.credential.clear();
-        endpoint.trim().clone_into(&mut target.custom_url);
+        target.set_custom_url(endpoint)?;
     }
 
-    apply_cli_upload_overrides(&mut target, cli);
+    apply_cli_upload_overrides(&mut target, cli)?;
     target.validate()?;
     Ok(target)
 }
 
-fn apply_cli_upload_overrides(target: &mut UploadTarget, cli: &Cli) {
+fn apply_cli_upload_overrides(target: &mut UploadTarget, cli: &Cli) -> Result<()> {
     if let Some(credential) = &cli.credential {
         credential.trim().clone_into(&mut target.credential);
     }
 
     if let Some(header) = &cli.header {
-        header.name.clone_into(&mut target.header_name);
-        header.value.clone_into(&mut target.header_value);
+        anyhow::ensure!(
+            target.kind == UploaderKind::Custom,
+            "--header requires the Custom uploader"
+        );
+        target.authorize_custom_header(&header.name, &header.value)?;
     }
+
+    Ok(())
 }
 
 fn apply_upload_target(config: &mut AppConfig, target: UploadTarget) {
@@ -302,6 +307,7 @@ fn apply_upload_target(config: &mut AppConfig, target: UploadTarget) {
         .set_for_provider(target.kind, target.credential);
     config.upload_header_name = target.header_name;
     config.upload_header_value = target.header_value;
+    config.upload_header_endpoint = Some(target.header_endpoint);
 }
 
 fn write_history(
@@ -354,6 +360,9 @@ fn capture_headless(config: &AppConfig) -> Result<UploadPayload> {
 fn capture_headless(_config: &AppConfig) -> Result<UploadPayload> {
     bail!("screenshot support is not included in this build; file uploads work headlessly")
 }
+
+#[cfg(test)]
+mod command_tests;
 
 #[cfg(test)]
 mod tests {

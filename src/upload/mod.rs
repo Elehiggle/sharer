@@ -122,9 +122,48 @@ pub struct UploadTarget {
     pub credential: String,
     pub header_name: String,
     pub header_value: String,
+    /// Canonical endpoint explicitly authorized to receive the custom header.
+    pub header_endpoint: String,
 }
 
 impl UploadTarget {
+    /// Change the custom endpoint, dropping a header authorized for another endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the new endpoint is not an HTTP(S) URL without userinfo.
+    pub fn set_custom_url(&mut self, endpoint: &str) -> Result<()> {
+        let endpoint = canonical_uploader_endpoint(endpoint)?;
+
+        if !self.header_name.is_empty() && self.header_endpoint != endpoint {
+            self.header_name.clear();
+            self.header_value.clear();
+            self.header_endpoint.clear();
+        }
+
+        self.custom_url = endpoint;
+        Ok(())
+    }
+
+    /// Authorize an explicitly supplied custom header for the current endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the header or endpoint is invalid.
+    pub fn authorize_custom_header(&mut self, name: &str, value: &str) -> Result<()> {
+        validate_upload_header(name, value)?;
+        let endpoint = if name.trim().is_empty() {
+            String::new()
+        } else {
+            canonical_uploader_endpoint(&self.custom_url)?
+        };
+
+        self.header_name = name.trim().to_owned();
+        value.clone_into(&mut self.header_value);
+        self.header_endpoint = endpoint;
+        Ok(())
+    }
+
     /// Validate endpoint, credential, and custom-header requirements.
     ///
     /// # Errors
@@ -134,6 +173,11 @@ impl UploadTarget {
         if self.kind == UploaderKind::Custom {
             validate_uploader_url(&self.custom_url)?;
             validate_upload_header(&self.header_name, &self.header_value)?;
+            anyhow::ensure!(
+                self.header_name.is_empty()
+                    || canonical_uploader_endpoint(&self.custom_url)? == self.header_endpoint,
+                "custom request header is authorized for a different endpoint; re-enter the header for this endpoint"
+            );
         }
 
         anyhow::ensure!(
@@ -154,6 +198,10 @@ impl fmt::Debug for UploadTarget {
             .field("credential_configured", &!self.credential.is_empty())
             .field("header_name", &self.header_name)
             .field("header_value", &"[redacted]")
+            .field(
+                "header_endpoint_configured",
+                &!self.header_endpoint.is_empty(),
+            )
             .finish()
     }
 }
@@ -571,14 +619,16 @@ impl UploadClient {
         route: &UploadRoute,
         custom_header: Option<(&str, &str)>,
     ) -> Result<Self> {
-        let (header_name, header_value) = custom_header.unwrap_or_default();
-        let target = UploadTarget {
+        let mut target = UploadTarget {
             kind: UploaderKind::Custom,
             custom_url: endpoint.to_owned(),
             credential: String::new(),
-            header_name: header_name.to_owned(),
-            header_value: header_value.to_owned(),
+            ..UploadTarget::default()
         };
+
+        if let Some((name, value)) = custom_header {
+            target.authorize_custom_header(name, value)?;
+        }
 
         Self::for_target(&target, route)
     }
@@ -756,6 +806,8 @@ impl UploadClient {
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.read)
             .timeout(timeouts.total)
+            .redirect(reqwest::redirect::Policy::none())
+            .referer(false)
             .default_headers(default_headers)
             .user_agent(concat!("sharer/", env!("CARGO_PKG_VERSION")));
         let builder = match route {
@@ -905,8 +957,26 @@ fn parse_uploader_url(endpoint: &str) -> Result<Url> {
         matches!(url.scheme(), "http" | "https") && url.host().is_some(),
         "uploader URL must be an absolute HTTP or HTTPS URL"
     );
+    anyhow::ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "uploader URL must not contain userinfo; use an explicit request header"
+    );
 
     Ok(url)
+}
+
+/// Normalize the configured destination used to bind a custom request header.
+///
+/// # Errors
+///
+/// Returns an error for invalid HTTP(S) endpoints or embedded userinfo.
+pub fn canonical_uploader_endpoint(endpoint: &str) -> Result<String> {
+    let mut url = parse_uploader_url(endpoint)?;
+
+    // Fragments are never sent in an HTTP request. Paths and query parameters remain
+    // part of the authorization boundary, even when two endpoints share an origin.
+    url.set_fragment(None);
+    Ok(url.into())
 }
 
 fn validate_response_url(value: &str, description: &str) -> Result<()> {

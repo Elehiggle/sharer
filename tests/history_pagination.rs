@@ -67,6 +67,7 @@ fn configuration_round_trips_through_sqlite() {
         uploader_url: "https://uploads.example/files".to_owned(),
         upload_header_name: "Authorization".to_owned(),
         upload_header_value: "Bearer private".to_owned(),
+        upload_header_endpoint: Some("https://uploads.example/files".to_owned()),
         ..AppConfig::default()
     };
 
@@ -95,6 +96,38 @@ fn legacy_private_name_setting_migrates_to_the_naming_selector() {
     assert_eq!(config.capture_naming.mode, CaptureNameMode::Random);
     assert!(config.capture_naming.custom_name.is_empty());
     assert!(!config.privacy.private_capture_names);
+}
+
+#[test]
+fn legacy_custom_header_is_bound_to_its_existing_endpoint_on_load() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = PlatformStorage::open_in(directory.path()).unwrap();
+
+    storage
+        .write(
+            "application",
+            br#"{"uploader_url":"https://uploads.example:443/upload","upload_header_name":"X-Api-Key","upload_header_value":"fake-secret"}"#,
+        )
+        .unwrap();
+
+    let mut config = AppConfig::load(&storage).unwrap();
+
+    assert_eq!(
+        config.upload_header_endpoint.as_deref(),
+        Some("https://uploads.example/upload")
+    );
+    assert!(config.upload_target().validate().is_ok());
+
+    config.uploader_url = "https://other.example/upload".to_owned();
+    assert!(config.upload_target().validate().is_err());
+    config.save(&storage).unwrap();
+    assert!(
+        AppConfig::load(&storage)
+            .unwrap()
+            .upload_target()
+            .validate()
+            .is_err()
+    );
 }
 
 #[test]
