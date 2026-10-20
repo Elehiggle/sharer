@@ -30,14 +30,14 @@ struct LatestRelease {
 }
 
 pub(super) fn spawn_check(
-    tor_proxy: Option<String>,
-    require_tor: bool,
+    proxy_url: Option<String>,
+    require_proxy: bool,
 ) -> Result<mpsc::Receiver<UpdateCheck>> {
     let (sender, receiver) = mpsc::channel();
 
-    if require_tor && tor_proxy.is_none() {
+    if require_proxy && proxy_url.is_none() {
         let _ = sender.send(UpdateCheck::Failed(
-            "Skipped because Tor is required but unavailable".to_owned(),
+            "Skipped because a proxy is required but unavailable".to_owned(),
         ));
 
         return Ok(receiver);
@@ -46,7 +46,7 @@ pub(super) fn spawn_check(
     std::thread::Builder::new()
         .name("sharer-update-check".to_owned())
         .spawn(move || {
-            let result = check(tor_proxy.as_deref());
+            let result = check(proxy_url.as_deref());
             let event = match result {
                 Ok(Some(info)) => UpdateCheck::Available(info),
                 Ok(None) => UpdateCheck::Current,
@@ -60,7 +60,7 @@ pub(super) fn spawn_check(
     Ok(receiver)
 }
 
-fn check(tor_proxy: Option<&str>) -> Result<Option<UpdateInfo>> {
+fn check(proxy_url: Option<&str>) -> Result<Option<UpdateInfo>> {
     let (endpoint, release_url) = release_urls(env!("CARGO_PKG_REPOSITORY"))?;
 
     ensure_tls_provider();
@@ -68,8 +68,8 @@ fn check(tor_proxy: Option<&str>) -> Result<Option<UpdateInfo>> {
         .timeout(Duration::from_secs(8))
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none());
-    let builder = if let Some(proxy) = tor_proxy {
-        builder.proxy(reqwest::Proxy::all(proxy).context("invalid Tor proxy URL")?)
+    let builder = if let Some(proxy) = proxy_url {
+        builder.proxy(reqwest::Proxy::all(proxy).context("invalid proxy URL")?)
     } else {
         builder
     };
@@ -167,12 +167,12 @@ mod tests {
     use super::{UpdateCheck, spawn_check};
 
     #[test]
-    fn required_tor_without_a_proxy_skips_the_network_check() {
+    fn required_proxy_without_an_endpoint_skips_the_network_check() {
         let receiver = spawn_check(None, true).unwrap();
         let event = receiver.try_recv().unwrap();
 
         assert!(
-            matches!(event, UpdateCheck::Failed(message) if message.contains("Tor is required"))
+            matches!(event, UpdateCheck::Failed(message) if message.contains("a proxy is required"))
         );
     }
 

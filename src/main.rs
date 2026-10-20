@@ -398,8 +398,8 @@ mod tests {
 
     #[cfg(not(feature = "desktop"))]
     #[test]
-    fn tor_session_without_desktop_support_fails_explicitly() {
-        let cli = Cli::try_parse_from(["ShareR", "--require-tor"]).unwrap();
+    fn proxy_session_without_desktop_support_fails_explicitly() {
+        let cli = Cli::try_parse_from(["ShareR", "--require-proxy"]).unwrap();
         let error = run_desktop(&cli).unwrap_err();
 
         assert!(error.to_string().contains("desktop UI is not included"));

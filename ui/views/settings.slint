@@ -290,7 +290,9 @@ export component SettingsView inherits Rectangle {
                         height: 44px;
                         VerticalLayout {
                             padding: 10px;
-                            CheckBox { text: "Require Tor for uploads"; checked <=> root.require-tor; }
+                            CheckBox { text: "Require proxy for uploads"; checked <=> root.require-tor;
+                                Tooltip { text: @markdown("Requires a local SOCKS5 proxy on **127.0.0.1:9050 or :9150**. Uploads fail when no proxy is available, without direct fallback.\n\nShareR does not verify Tor routing or anonymity. Use a proxy you trust."); }
+                            }
                         }
                     }
             }

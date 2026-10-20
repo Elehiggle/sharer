@@ -1,4 +1,4 @@
-//! Detection of local SOCKS5 services on Tor's standard ports.
+//! Detection of local SOCKS5 services on ports 9050 and 9150.
 
 use std::{
     io::{Read as _, Write as _},
@@ -42,14 +42,16 @@ impl SocksProbe for SystemSocksProbe {
     }
 }
 
-/// A verified local SOCKS5 endpoint on a standard Tor port.
+/// A local endpoint that responds to a SOCKS5 greeting on port 9050 or 9150.
+///
+/// The greeting does not establish Tor routing or anonymity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TorProxy {
     url: String,
 }
 
 impl TorProxy {
-    /// Detect a local Tor-compatible SOCKS5 endpoint.
+    /// Detect a local SOCKS5 endpoint on port 9050 or 9150.
     #[must_use]
     pub fn detect() -> Option<Self> {
         detect_with(&SystemSocksProbe)
@@ -62,24 +64,24 @@ impl TorProxy {
     }
 }
 
-/// Prefer a detected Tor proxy, optionally refusing a direct fallback.
+/// Prefer a detected local SOCKS5 proxy, optionally refusing a direct fallback.
 ///
 /// # Errors
 ///
-/// Returns an error when Tor is required but no standard local endpoint responds.
-pub fn preferred_upload_route(require_tor: bool) -> Result<UploadRoute, TorUnavailableError> {
+/// Returns an error when a proxy is required but no supported local endpoint responds.
+pub fn preferred_upload_route(require_proxy: bool) -> Result<UploadRoute, TorUnavailableError> {
     if let Some(proxy) = TorProxy::detect() {
         Ok(UploadRoute::Socks5(proxy.url().to_owned()))
-    } else if require_tor {
+    } else if require_proxy {
         Err(TorUnavailableError)
     } else {
         Ok(UploadRoute::Direct)
     }
 }
 
-/// No verified local Tor SOCKS5 endpoint is available.
+/// No local SOCKS5 endpoint is available on port 9050 or 9150.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("Tor is required, but no SOCKS5 service was found on localhost:9050 or :9150")]
+#[error("A proxy is required, but no SOCKS5 service was found on 127.0.0.1:9050 or :9150")]
 pub struct TorUnavailableError;
 
 fn detect_with(probe: &impl SocksProbe) -> Option<TorProxy> {

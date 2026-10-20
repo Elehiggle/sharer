@@ -8,7 +8,7 @@ ShareR captures, records, and optionally uploads from one small desktop app. It 
 
 **Share almost anything.** Upload files, clipboard images, clipboard text, and copied files through the same workflow.
 
-**Keep control.** Captures stay local by default. You can opt into automatic uploads, remove identifying image metadata, hide window titles behind random names, and require Tor when a direct upload is not acceptable.
+**Keep control.** Captures stay local by default. You can opt into automatic uploads, remove identifying image metadata, hide window titles behind random names, and require a proxy when a direct upload is not acceptable.
 
 **Stay out of the way.** ShareR lives in the system tray, responds to global shortcuts, and keeps old uploads in a small local history.
 
@@ -100,7 +100,9 @@ Generated captures are saved locally by default under your Pictures directory in
 
 ## Settings worth knowing
 
-**Privacy.** Image metadata removal detects JPEG, PNG, and WebP from their bytes, including renamed files, without recompressing the image. It removes EXIF, ordinary JPEG XMP/IPTC/comments, PNG text, and WebP XMP. Color profiles and recognized HDR gain-map metadata are preserved. Mixed or unsupported HDR XMP is rejected when it cannot be safely cleaned. File and reader uploads use a private temporary file when cleaning is needed, keeping memory bounded and leaving the source unchanged. This covers these metadata containers, not information visible in the pixels or arbitrary embedded payloads. Private names stop window titles from becoming capture filenames. Require Tor blocks uploads when a verified local Tor proxy is not available.
+**Privacy.** Image metadata removal detects JPEG, PNG, and WebP from their bytes, including renamed files, without recompressing the image. It removes EXIF, ordinary JPEG XMP/IPTC/comments, PNG text, and WebP XMP. Color profiles and recognized HDR gain-map metadata are preserved. Mixed or unsupported HDR XMP is rejected when it cannot be safely cleaned. File and reader uploads use a private temporary file when cleaning is needed, keeping memory bounded and leaving the source unchanged. This covers these metadata containers, not information visible in the pixels or arbitrary embedded payloads. Private names stop window titles from becoming capture filenames.
+
+**Proxy routing.** Require proxy blocks uploads when no local SOCKS5 proxy responds on `127.0.0.1:9050` or `127.0.0.1:9150`, without a direct fallback. ShareR checks the SOCKS5 greeting, not whether the proxy uses Tor or provides anonymity. Use a proxy you trust; ShareR does not start or manage it. A detected proxy is also preferred when the requirement is off.
 
 **Retina output.** Macs can keep native pixels or reduce captures to logical size. Fast, Balanced, and Sharp resizing are available, with Fast as the default.
 
@@ -138,11 +140,11 @@ ShareR document.pdf --time 3600
 # Upload clipboard contents
 ShareR --clipboard --time 86400
 
-# Require Tor and refuse a direct upload
-ShareR document.pdf --require-tor
+# Require a local SOCKS5 proxy and refuse a direct upload
+ShareR document.pdf --require-proxy
 
-# Require Tor for every upload and the update check in this desktop session
-ShareR --require-tor
+# Require a proxy for every upload and the update check in this desktop session
+ShareR --require-proxy
 
 # Browse history
 ShareR --history
@@ -156,7 +158,7 @@ Successful uploads print the complete public URL using standard URL encoding. Hi
 
 The desktop defaults to the platform's preferred renderer. Use `--renderer gpu` to require it or `--renderer software` if the GPU renderer is unavailable or misbehaves. `auto` continues to honor Slint's renderer environment overrides.
 
-`--require-tor` (alias `--tor`) also applies with `--background`. In a desktop session, changing the saved Tor preference cannot relax the command-line requirement. The flag does not change the saved preference.
+`--require-proxy` also applies with `--background`. In a desktop session, changing the saved proxy preference cannot relax the command-line requirement. The flag does not change the saved preference. The older `--require-tor` and `--tor` flags remain aliases with the same proxy-only guarantee.
 
 Run `ShareR --help` for every option.
 

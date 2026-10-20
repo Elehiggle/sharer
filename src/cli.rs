@@ -93,8 +93,11 @@ pub struct Cli {
     #[arg(long)]
     pub no_copy: bool,
 
-    /// Require a local Tor SOCKS5 proxy for this upload or the entire desktop session.
-    #[arg(long, visible_alias = "tor")]
+    /// Require a local SOCKS5 proxy for this upload or the entire desktop session.
+    ///
+    /// Looks on 127.0.0.1:9050 and :9150 and refuses direct fallback.
+    /// This does not verify Tor routing or anonymity.
+    #[arg(long = "require-proxy", visible_aliases = ["require-tor", "tor"])]
     pub require_tor: bool,
 }
 
@@ -151,7 +154,7 @@ impl fmt::Debug for Cli {
             .field("history_offset", &self.history_offset)
             .field("time", &self.time)
             .field("no_copy", &self.no_copy)
-            .field("require_tor", &self.require_tor)
+            .field("require_proxy", &self.require_tor)
             .finish()
     }
 }
@@ -331,8 +334,8 @@ mod tests {
     }
 
     #[test]
-    fn tor_flags_select_and_protect_the_entire_desktop_session() {
-        for flag in ["--require-tor", "--tor"] {
+    fn proxy_flags_select_and_protect_the_entire_desktop_session() {
+        for flag in ["--require-proxy", "--require-tor", "--tor"] {
             for background in [false, true] {
                 let mut arguments = vec!["sharer", flag];
 
@@ -358,8 +361,8 @@ mod tests {
     }
 
     #[test]
-    fn tor_flag_with_a_file_still_selects_a_headless_upload() {
-        for flag in ["--require-tor", "--tor"] {
+    fn proxy_flags_with_a_file_still_select_a_headless_upload() {
+        for flag in ["--require-proxy", "--require-tor", "--tor"] {
             let cli = Cli::try_parse_from(["sharer", "capture.png", flag]).unwrap();
 
             assert!(cli.is_headless());

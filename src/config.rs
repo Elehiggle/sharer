@@ -193,6 +193,7 @@ impl CaptureResolution {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct PrivacyConfig {
+    /// Require a local SOCKS5 proxy; the serialized name is retained for compatibility.
     pub require_tor: bool,
     /// Retained only to migrate the original private-name checkbox.
     #[serde(alias = "strip_capture_metadata")]
