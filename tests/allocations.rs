@@ -135,6 +135,39 @@ fn inspecting_a_large_metadata_free_image_does_not_buffer_it() {
 }
 
 #[test]
+fn stripping_a_large_file_uses_bounded_memory_and_a_streamed_result() {
+    const DATA_SIZE: u32 = 32 * 1024 * 1024;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("large-image.data");
+    let mut file = File::create(&path).unwrap();
+
+    file.write_all(b"\x89PNG\r\n\x1a\n").unwrap();
+    file.write_all(&4_u32.to_be_bytes()).unwrap();
+    file.write_all(b"eXIfmeta\0\0\0\0").unwrap();
+    file.write_all(&DATA_SIZE.to_be_bytes()).unwrap();
+    file.write_all(b"IDAT").unwrap();
+    file.seek(SeekFrom::Current(i64::from(DATA_SIZE))).unwrap();
+    file.write_all(&[0; 4]).unwrap();
+    file.write_all(&0_u32.to_be_bytes()).unwrap();
+    file.write_all(b"IEND").unwrap();
+    file.write_all(&[0; 4]).unwrap();
+    drop(file);
+    let mut payload = UploadPayload::from_path(&path).unwrap();
+    let allocations = measure(|| payload.remove_exif().unwrap());
+
+    assert!(
+        allocations.bytes_max < 128 * 1024,
+        "cleaning a large image held {} heap bytes",
+        allocations.bytes_max
+    );
+    assert_eq!(payload.len(), u64::from(DATA_SIZE) + 32);
+    assert_eq!(
+        std::fs::metadata(path).unwrap().len(),
+        u64::from(DATA_SIZE) + 48
+    );
+}
+
+#[test]
 fn stripping_in_memory_exif_reuses_the_capture_buffer() {
     let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
 

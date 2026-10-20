@@ -194,6 +194,7 @@ pub struct PrivacyConfig {
     /// Retained only to migrate the original private-name checkbox.
     #[serde(alias = "strip_capture_metadata")]
     pub private_capture_names: bool,
+    /// Remove identifying image metadata; the serialized name is retained for compatibility.
     pub remove_exif: bool,
 }
 

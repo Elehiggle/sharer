@@ -94,6 +94,7 @@ These are tested boundaries, not aspirations:
 | Hand an owned 4 MiB capture to the uploader | 0 allocations                                      |
 | Wrap an owned 4 MiB recording for upload    | 1 allocation under 128 bytes, buffer is not copied |
 | Prepare a sparse 64 MiB file for streaming  | Less than 16 KiB allocated                         |
+| Clean a 32 MiB file-backed image            | Peak heap below 128 KiB; source stays unchanged    |
 | Stream a 16 MiB multipart upload            | Peak heap below 2 MiB                              |
 | Move a receipt into history                 | 0 allocations                                      |
 | Read an uploader response                   | Hard limit of 64 KiB                               |
@@ -124,7 +125,7 @@ The EXIF and HDR fixtures come from [Google libultrahdr](https://github.com/goog
 | `minnie_sdr_with_exif.jpg` | `tests/data/minnie-320x240-yuv-icc.jpg` | `171bc422d337d8ba3bd3935cc489c0f755f83687ea7bb39337a7d407b657b08f` |
 | `apple_gainmap_new.jpg`    | `tests/data/apple_gainmap_new.jpg`      | `492a94bd0636bcf15b3f560c68142a7783936c1597e78b0d0461d8be7fddc078` |
 
-Tests verify that EXIF removal preserves SDR pixels, ICC profiles, and HDR gain-map structure. They also cover every public resize quality and generated SDR PNG metadata. Do not replace a fixture without updating its provenance and checksum here.
+Tests verify that identifying metadata removal preserves SDR pixels, ICC profiles, HDR gain-map pixels and rendering XMP, and the sizes and offsets in JPEG MPF tables. Metadata-free inspection and owned PNG cleaning do not buffer the image. File and reader cleaning streams through a private temporary file. JPEG XML inspection is limited to a 64 KiB packet and 4096 XML nodes; MPF rewriting supports up to 32 images. Unsupported or mixed HDR metadata is rejected before upload rather than retaining identifying fields or changing HDR rendering. Google gain-map image-length references are retained only when they match the unchanged second JPEG; cleaning a referenced secondary image, primary-length references, and padding references are rejected before mutation. They also cover every public resize quality and generated SDR PNG metadata. Do not replace a fixture without updating its provenance and checksum here.
 
 ## Uploaders
 

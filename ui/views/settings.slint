@@ -262,7 +262,9 @@ export component SettingsView inherits Rectangle {
                         height: root.capture-name-mode == 3 ? 116px : 82px;
                         VerticalLayout {
                             padding: 10px; spacing: 5px;
-                            CheckBox { text: "Remove EXIF from image uploads"; checked <=> root.remove-exif; }
+                            CheckBox { text: "Remove identifying image metadata"; checked <=> root.remove-exif;
+                                Tooltip { text: @markdown("**JPEG, PNG, and WebP**\n\nRemoves EXIF, ordinary XMP, and IPTC.\n\nRemoves comments and PNG text.\n\nPreserves color profiles and known HDR gain maps.\n\nUnsupported mixed HDR metadata blocks upload."); }
+                            }
                             Rectangle { height: 1px; background: Theme.border; }
                             FormRow { label: "File name"; label-width: root.label-width;
                                 CompactSelect {

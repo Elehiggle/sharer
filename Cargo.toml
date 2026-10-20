@@ -58,6 +58,7 @@ num-traits = { version = "0.2", optional = true }
 open = { version = "5", optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+roxmltree = "0.21.1"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "fallible_uint"] }
 semver = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }

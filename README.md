@@ -8,7 +8,7 @@ ShareR captures, records, and optionally uploads from one small desktop app. It 
 
 **Share almost anything.** Upload files, clipboard images, clipboard text, and copied files through the same workflow.
 
-**Keep control.** Captures stay local by default. You can opt into automatic uploads, strip EXIF, hide window titles behind random names, and require Tor when a direct upload is not acceptable.
+**Keep control.** Captures stay local by default. You can opt into automatic uploads, remove identifying image metadata, hide window titles behind random names, and require Tor when a direct upload is not acceptable.
 
 **Stay out of the way.** ShareR lives in the system tray, responds to global shortcuts, and keeps old uploads in a small local history.
 
@@ -100,7 +100,7 @@ Generated captures are saved locally by default under your Pictures directory in
 
 ## Settings worth knowing
 
-**Privacy.** EXIF removal supports JPEG, PNG, and WebP without recompressing the image. Private names stop window titles from becoming capture filenames. Require Tor blocks uploads when a verified local Tor proxy is not available.
+**Privacy.** Image metadata removal detects JPEG, PNG, and WebP from their bytes, including renamed files, without recompressing the image. It removes EXIF, ordinary JPEG XMP/IPTC/comments, PNG text, and WebP XMP. Color profiles and recognized HDR gain-map metadata are preserved. Mixed or unsupported HDR XMP is rejected when it cannot be safely cleaned. File and reader uploads use a private temporary file when cleaning is needed, keeping memory bounded and leaving the source unchanged. This covers these metadata containers, not information visible in the pixels or arbitrary embedded payloads. Private names stop window titles from becoming capture filenames. Require Tor blocks uploads when a verified local Tor proxy is not available.
 
 **Retina output.** Macs can keep native pixels or reduce captures to logical size. Fast, Balanced, and Sharp resizing are available, with Fast as the default.
 
