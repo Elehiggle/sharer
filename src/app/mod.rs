@@ -711,6 +711,7 @@ fn ensure_ui(ui: &UiSlot, resources: &CallbackResources, transient: bool) -> Res
     if ui.borrow().is_none() {
         let window = AppWindow::new().context("failed to create application window")?;
 
+        views::initialize_presentation(&window);
         install_window_event_filter(&window, resources);
 
         views::settings::initialize(&window, &resources.config.borrow());

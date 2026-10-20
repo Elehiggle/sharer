@@ -5,6 +5,7 @@ pub mod capture;
 pub mod clipboard;
 pub mod config;
 pub mod history;
+pub mod presentation;
 pub mod proxy;
 pub mod storage;
 pub mod upload;
