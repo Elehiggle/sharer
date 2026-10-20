@@ -1,11 +1,64 @@
+//! Background upload worker and capture preparation.
+
+use anyhow::Context as _;
+
 use super::{
-    Arc, FailureStage, HistoryEntry, Instant, Job, JobCallbacks, JobFailure, JobSource, PathBuf,
-    PlatformStorage, ProcessedUpload, Result, UploadClient, UploadFailure, UploadPayload,
-    UploadProgress, capture, clipboard, is_upload_cancelled, is_upload_timeout,
-    preferred_upload_route,
+    Arc, FailureStage, HistoryEntry, Instant, Job, JobCallbacks, JobFailure, JobResult, JobSource,
+    PathBuf, PlatformStorage, ProcessedUpload, Receiver, Result, Sender, UploadClient,
+    UploadFailure, UploadPayload, UploadProgress, capture, clipboard, is_upload_cancelled,
+    is_upload_timeout, mpsc, preferred_upload_route,
 };
 
-pub(super) fn process_job(
+pub(super) fn spawn_worker(
+    job_rx: Receiver<Job>,
+    result_tx: Sender<JobResult>,
+    upload_progress: Arc<UploadProgress>,
+    require_tor: bool,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("sharer-upload".to_owned())
+        .spawn(move || {
+            while let Ok(job) = receive_job(&job_rx, require_tor) {
+                upload_progress.reset();
+                let restore_window_after_capture = job.restore_window_after_capture;
+                let result = process_job(job, &upload_progress, || {
+                    if restore_window_after_capture {
+                        let _ = result_tx.send(JobResult::CaptureComplete);
+                    }
+                });
+
+                upload_progress.finish();
+                let event = match result {
+                    Ok(receipt) => JobResult::Success(Box::new(receipt)),
+
+                    Err(error) => JobResult::Error {
+                        message: format!("{:#}", error.error),
+                        stage: error.stage,
+                    },
+                };
+                let _ = result_tx.send(event);
+            }
+        })
+        .context("failed to start upload worker")?;
+
+    Ok(())
+}
+
+pub(super) fn receive_job(
+    job_rx: &Receiver<Job>,
+    require_tor: bool,
+) -> Result<Job, mpsc::RecvError> {
+    let mut job = job_rx.recv()?;
+
+    // The command-line requirement remains in force after Settings change or the UI is recreated.
+    if let Some(upload) = job.upload.as_mut() {
+        upload.require_tor |= require_tor;
+    }
+
+    Ok(job)
+}
+
+fn process_job(
     job: Job,
     upload_progress: &Arc<UploadProgress>,
     capture_complete: impl FnOnce(),

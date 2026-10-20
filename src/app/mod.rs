@@ -24,7 +24,7 @@ use slint::winit_030::winit::{
 
 use crate::{
     AppWindow,
-    cli::RendererPreference,
+    cli::{DesktopOptions, RendererPreference},
     hotkeys::{HotkeyAction, Hotkeys, captured_shortcut, shortcuts_enabled},
     icon,
     tray::{Tray, TrayAction},
@@ -57,9 +57,9 @@ mod job;
 mod region;
 mod result;
 
-use job::process_job;
 #[cfg(test)]
 use job::process_job_with_history;
+use job::spawn_worker;
 use result::{
     append_status_detail, apply_activity, apply_update, current_window,
     invalidate_latest_local_path, promote_visible_transient_ui, receive_job_result, receive_update,
@@ -299,8 +299,8 @@ struct JobCallbacks<P, C> {
     capture_complete: C,
 }
 
-pub fn run(show_on_start: bool, renderer: RendererPreference) -> Result<()> {
-    select_renderer(renderer)?;
+pub fn run(options: DesktopOptions) -> Result<()> {
+    select_renderer(options.renderer)?;
 
     let storage = Rc::new(PlatformStorage::open()?);
     let mut config = AppConfig::load(storage.as_ref())?;
@@ -334,13 +334,15 @@ pub fn run(show_on_start: bool, renderer: RendererPreference) -> Result<()> {
     let (result_tx, result_rx) = mpsc::channel();
     let update_rx = spawn_check(
         tor_proxy.as_ref().map(|proxy| proxy.url().to_owned()),
-        config.borrow().privacy.require_tor,
+        options.require_tor || config.borrow().privacy.require_tor,
     )?;
     let upload_progress = Arc::new(UploadProgress::new());
     let upload_cancellation = Arc::new(UploadCancellation::default());
     let quit_after_job = Rc::new(Cell::new(false));
 
-    spawn_worker(job_rx, result_tx, Arc::clone(&upload_progress))?;
+    let worker_progress = Arc::clone(&upload_progress);
+
+    spawn_worker(job_rx, result_tx, worker_progress, options.require_tor)?;
     let callback_resources = CallbackResources {
         activity: Rc::clone(&activity),
         hotkeys: Rc::clone(&hotkeys),
@@ -370,7 +372,7 @@ pub fn run(show_on_start: bool, renderer: RendererPreference) -> Result<()> {
         quit_after_job,
     };
 
-    if show_on_start {
+    if options.show_on_start {
         open_ui(&polling_state, &callback_resources, false)?;
     }
 
@@ -1526,40 +1528,6 @@ fn upload_status_detail(target: &UploadTarget, lifetime_seconds: u32) -> String 
     } else {
         format!("Retention managed by {}", target.kind.name())
     }
-}
-
-fn spawn_worker(
-    job_rx: Receiver<Job>,
-    result_tx: Sender<JobResult>,
-    upload_progress: Arc<UploadProgress>,
-) -> Result<()> {
-    std::thread::Builder::new()
-        .name("sharer-upload".to_owned())
-        .spawn(move || {
-            while let Ok(job) = job_rx.recv() {
-                upload_progress.reset();
-                let restore_window_after_capture = job.restore_window_after_capture;
-                let result = process_job(job, &upload_progress, || {
-                    if restore_window_after_capture {
-                        let _ = result_tx.send(JobResult::CaptureComplete);
-                    }
-                });
-
-                upload_progress.finish();
-                let event = match result {
-                    Ok(receipt) => JobResult::Success(Box::new(receipt)),
-
-                    Err(error) => JobResult::Error {
-                        message: format!("{:#}", error.error),
-                        stage: error.stage,
-                    },
-                };
-                let _ = result_tx.send(event);
-            }
-        })
-        .context("failed to start upload worker")?;
-
-    Ok(())
 }
 
 fn start_polling(

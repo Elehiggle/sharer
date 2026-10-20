@@ -93,7 +93,7 @@ pub struct Cli {
     #[arg(long)]
     pub no_copy: bool,
 
-    /// Refuse to upload unless a local Tor SOCKS5 proxy is available.
+    /// Require a local Tor SOCKS5 proxy for this upload or the entire desktop session.
     #[arg(long, visible_alias = "tor")]
     pub require_tor: bool,
 }
@@ -111,6 +111,24 @@ impl Cli {
             || self.credential.is_some()
             || self.header.is_some()
     }
+
+    #[cfg(feature = "desktop")]
+    #[must_use]
+    pub const fn desktop_options(&self) -> DesktopOptions {
+        DesktopOptions {
+            show_on_start: !self.background,
+            renderer: self.renderer,
+            require_tor: self.require_tor,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[cfg(feature = "desktop")]
+pub struct DesktopOptions {
+    pub show_on_start: bool,
+    pub renderer: RendererPreference,
+    pub require_tor: bool,
 }
 
 impl fmt::Debug for Cli {
@@ -310,6 +328,43 @@ mod tests {
 
         assert!(cli.background);
         assert!(!cli.is_headless());
+    }
+
+    #[test]
+    fn tor_flags_select_and_protect_the_entire_desktop_session() {
+        for flag in ["--require-tor", "--tor"] {
+            for background in [false, true] {
+                let mut arguments = vec!["sharer", flag];
+
+                if background {
+                    arguments.push("--background");
+                }
+
+                let cli = Cli::try_parse_from(arguments).unwrap();
+
+                assert!(!cli.is_headless());
+                assert!(cli.require_tor);
+
+                #[cfg(feature = "desktop")]
+                {
+                    let desktop = cli.desktop_options();
+
+                    assert!(desktop.require_tor);
+                    assert_eq!(desktop.show_on_start, !background);
+                    assert_eq!(desktop.renderer, cli.renderer);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tor_flag_with_a_file_still_selects_a_headless_upload() {
+        for flag in ["--require-tor", "--tor"] {
+            let cli = Cli::try_parse_from(["sharer", "capture.png", flag]).unwrap();
+
+            assert!(cli.is_headless());
+            assert!(cli.require_tor);
+        }
     }
 
     #[test]

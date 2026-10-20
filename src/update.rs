@@ -164,6 +164,18 @@ mod tests {
     use super::{release_update, release_urls};
     use semver::Version;
 
+    use super::{UpdateCheck, spawn_check};
+
+    #[test]
+    fn required_tor_without_a_proxy_skips_the_network_check() {
+        let receiver = spawn_check(None, true).unwrap();
+        let event = receiver.try_recv().unwrap();
+
+        assert!(
+            matches!(event, UpdateCheck::Failed(message) if message.contains("Tor is required"))
+        );
+    }
+
     #[test]
     fn release_destinations_come_from_package_repository() {
         let (endpoint, release_url) = release_urls("https://github.com/example/sharer").unwrap();
