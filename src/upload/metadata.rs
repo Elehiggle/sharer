@@ -314,14 +314,31 @@ fn prepare(reader: &mut dyn ReadSeek, length: u64, format: MetadataFormat) -> Re
         references.observe(&piece)?;
 
         if matches!(piece.kind, PieceKind::Mpf) {
-            anyhow::ensure!(
-                mpf.is_none(),
-                "multiple JPEG MPF tables cannot be safely rewritten"
-            );
             reader.seek(SeekFrom::Start(piece.start))?;
             let mut bytes = vec![0; usize::try_from(piece.end - piece.start)?];
 
             reader.read_exact(&mut bytes)?;
+            let (ifd, count, little) = mpf_directory(&bytes)?;
+            let has_index = (0..count).try_fold(false, |found, index| {
+                Ok::<_, anyhow::Error>(
+                    found
+                        || matches!(
+                            read_u16(&bytes, ifd + 2 + index * 12, little)?,
+                            0xb001 | 0xb002
+                        ),
+                )
+            })?;
+
+            if !has_index {
+                anyhow::ensure!(mpf.is_some(), "JPEG MP Attribute table has no MP Index");
+                validate_mpf_attributes(&bytes, references.image_count + 1)?;
+                continue;
+            }
+
+            anyhow::ensure!(
+                mpf.is_none(),
+                "multiple JPEG MPF tables cannot be safely rewritten"
+            );
             mpf = Some(Mpf {
                 start: piece.start,
                 bytes,
@@ -839,15 +856,7 @@ fn jpeg_end(reader: &mut dyn ReadSeek, length: u64, start: u64) -> Result<u64> {
 fn repair_mpf(reader: &mut dyn ReadSeek, length: u64, mpf: &mut Mpf) -> Result<()> {
     // MPF offsets are relative to the TIFF header, whereas the first image offset is zero.
     let tiff = 8_usize;
-
-    anyhow::ensure!(mpf.bytes.len() >= tiff + 8, "MPF TIFF header is truncated");
-    let little = match &mpf.bytes[tiff..tiff + 4] {
-        b"II*\0" => true,
-        b"MM\0*" => false,
-        _ => bail!("MPF TIFF header is invalid"),
-    };
-    let ifd = tiff + usize::try_from(read_u32(&mpf.bytes, tiff + 4, little)?)?;
-    let count = usize::from(read_u16(&mpf.bytes, ifd, little)?);
+    let (ifd, count, little) = mpf_directory(&mpf.bytes)?;
     let mut entries = None;
 
     for index in 0..count {
@@ -911,6 +920,72 @@ fn repair_mpf(reader: &mut dyn ReadSeek, length: u64, mpf: &mut Mpf) -> Result<(
         };
 
         write_u32(&mut mpf.bytes, entry + 8, new_offset, little);
+    }
+
+    Ok(())
+}
+
+fn mpf_directory(bytes: &[u8]) -> Result<(usize, usize, bool)> {
+    let tiff = 8_usize;
+
+    anyhow::ensure!(bytes.len() >= tiff + 8, "MPF TIFF header is truncated");
+    let little = match &bytes[tiff..tiff + 4] {
+        b"II*\0" => true,
+        b"MM\0*" => false,
+        _ => bail!("MPF TIFF header is invalid"),
+    };
+    let ifd = tiff + usize::try_from(read_u32(bytes, tiff + 4, little)?)?;
+    let count = usize::from(read_u16(bytes, ifd, little)?);
+
+    anyhow::ensure!(
+        ifd.checked_add(2 + count * 12 + 4)
+            .is_some_and(|end| end <= bytes.len()),
+        "MPF directory is truncated"
+    );
+    Ok((ifd, count, little))
+}
+
+fn validate_mpf_attributes(bytes: &[u8], image_number: usize) -> Result<()> {
+    let (ifd, count, little) = mpf_directory(bytes)?;
+
+    // Only retain the standard version and this image's ordinal. Reject opaque
+    // fields, padding and linked directories rather than retaining identifying data.
+    anyhow::ensure!(
+        image_number > 1
+            && image_number <= MAX_MPF_IMAGES
+            && ifd == 16
+            && count == 2
+            && bytes.len() == ifd + 2 + count * 12 + 4
+            && read_u32(bytes, ifd + 2 + count * 12, little)? == 0,
+        "JPEG MP Attribute table has unsupported fields or directories"
+    );
+    let mut version = false;
+    let mut individual_number = false;
+
+    for index in 0..count {
+        let tag = ifd + 2 + index * 12;
+        let valid = match read_u16(bytes, tag, little)? {
+            0xb000 if !version => {
+                version = true;
+                read_u16(bytes, tag + 2, little)? == 7
+                    && read_u32(bytes, tag + 4, little)? == 4
+                    && &bytes[tag + 8..tag + 12] == b"0100"
+            }
+
+            0xb101 if !individual_number => {
+                individual_number = true;
+                read_u16(bytes, tag + 2, little)? == 4
+                    && read_u32(bytes, tag + 4, little)? == 1
+                    && usize::try_from(read_u32(bytes, tag + 8, little)?)? == image_number
+            }
+
+            _ => false,
+        };
+
+        anyhow::ensure!(
+            valid,
+            "JPEG MP Attribute table has unsupported fields or values"
+        );
     }
 
     Ok(())

@@ -324,6 +324,168 @@ fn hdr_gainmap_pixels_xmp_and_mpf_references_survive() {
     assert_eq!(jpeg_icc_payload(&stripped), jpeg_icc_payload(HDR));
 }
 
+fn mpf_attributes(little: bool) -> Vec<u8> {
+    let mut bytes = b"MPF\0MM\0*\0\0\0\x08\0\x02".to_vec();
+
+    bytes.extend_from_slice(&[0xb0, 0x00, 0, 7, 0, 0, 0, 4, b'0', b'1', b'0', b'0']);
+    bytes.extend_from_slice(&[0xb1, 0x01, 0, 4, 0, 0, 0, 1, 0, 0, 0, 2]);
+    bytes.extend_from_slice(&[0; 4]);
+
+    if little {
+        bytes[4..8].copy_from_slice(b"II*\0");
+        bytes[8..12].reverse();
+        bytes[12..14].reverse();
+
+        for tag in [14, 26] {
+            bytes[tag..tag + 2].reverse();
+            bytes[tag + 2..tag + 4].reverse();
+            bytes[tag + 4..tag + 8].reverse();
+        }
+
+        bytes[34..38].reverse();
+    }
+
+    jpeg_segment(0xe2, &bytes)
+}
+
+fn mpf_image_locations(bytes: &[u8]) -> (usize, usize, usize) {
+    let tiff = bytes
+        .windows(4)
+        .position(|bytes| bytes == b"MPF\0")
+        .unwrap()
+        + 4;
+    let ifd = tiff + usize::try_from(read_u32(bytes, tiff + 4, false).unwrap()).unwrap();
+    let count = usize::from(read_u16(bytes, ifd, false).unwrap());
+    let table_tag = (0..count)
+        .map(|index| ifd + 2 + index * 12)
+        .find(|tag| read_u16(bytes, *tag, false).unwrap() == 0xb002)
+        .unwrap();
+    let table = tiff + usize::try_from(read_u32(bytes, table_tag + 8, false).unwrap()).unwrap();
+    let secondary = tiff + usize::try_from(read_u32(bytes, table + 24, false).unwrap()).unwrap();
+
+    (tiff, table, secondary)
+}
+
+fn hdr_with_secondary_mpf(segment: &[u8]) -> Vec<u8> {
+    let mut bytes = HDR.to_vec();
+
+    strip_in_place(&mut bytes, MetadataFormat::Jpeg).unwrap();
+    let (_, table, secondary) = mpf_image_locations(&bytes);
+    let size = read_u32(&bytes, table + 20, false).unwrap();
+
+    write_u32(
+        &mut bytes,
+        table + 20,
+        size + u32::try_from(segment.len()).unwrap(),
+        false,
+    );
+    bytes.splice(secondary + 2..secondary + 2, segment.iter().copied());
+    bytes
+}
+
+#[test]
+fn secondary_mpf_attributes_survive_inspection_and_cleaning_for_all_payload_backings() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("hdr.jpg");
+
+    for little in [false, true] {
+        let expected = hdr_with_secondary_mpf(&mpf_attributes(little));
+        let (_, _, expected_secondary) = mpf_image_locations(&expected);
+        let primary_pixels = image::load_from_memory(&expected).unwrap().to_rgba8();
+        let secondary_pixels = image::load_from_memory(&expected[expected_secondary..])
+            .unwrap()
+            .to_rgba8();
+
+        for add_metadata in [false, true] {
+            let mut original = expected.clone();
+
+            if add_metadata {
+                let metadata = jpeg_segment(0xe1, b"Exif\0\0location");
+                let (_, table, secondary) = mpf_image_locations(&original);
+                let added = u32::try_from(metadata.len()).unwrap();
+
+                for size in [table + 4, table + 20] {
+                    let old = read_u32(&original, size, false).unwrap();
+
+                    write_u32(&mut original, size, old + added, false);
+                }
+
+                original.splice(secondary + 2..secondary + 2, metadata.iter().copied());
+                // Insert after the Index so the secondary offset also needs repair.
+                original.splice(secondary - 2..secondary - 2, metadata.iter().copied());
+                let old = read_u32(&original, table + 24, false).unwrap();
+
+                write_u32(&mut original, table + 24, old + added, false);
+            }
+
+            std::fs::write(&path, &original).unwrap();
+            let mut payloads = [
+                UploadPayload::from_bytes(original.clone(), "hdr.jpg".into(), "image/jpeg".into()),
+                UploadPayload::from_path(&path).unwrap(),
+                UploadPayload::from_reader(
+                    Cursor::new(original.clone()),
+                    u64::try_from(original.len()).unwrap(),
+                    "hdr.jpg".into(),
+                    "image/jpeg".into(),
+                ),
+            ];
+
+            for payload in &mut payloads {
+                payload.remove_exif().unwrap();
+                let cleaned = payload_bytes(payload);
+
+                assert_eq!(cleaned, expected);
+                assert_eq!(
+                    image::load_from_memory(&cleaned).unwrap().to_rgba8(),
+                    primary_pixels
+                );
+                assert_eq!(
+                    image::load_from_memory(&cleaned[expected_secondary..])
+                        .unwrap()
+                        .to_rgba8(),
+                    secondary_pixels
+                );
+            }
+
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+    }
+}
+
+#[test]
+fn duplicate_mpf_indexes_and_opaque_attributes_fail_before_mutation() {
+    let mut clean = HDR.to_vec();
+
+    strip_in_place(&mut clean, MetadataFormat::Jpeg).unwrap();
+    let (tiff, _, _) = mpf_image_locations(&clean);
+    let start = tiff - 8;
+    let size = usize::from(u16::from_be_bytes(
+        clean[start + 2..start + 4].try_into().unwrap(),
+    ));
+    let mut segments = vec![clean[start..start + 2 + size].to_vec()];
+    let attributes = mpf_attributes(false);
+
+    for (offset, replacement) in [(30, 5), (41, 3), (45, 1)] {
+        let mut invalid = attributes.clone();
+
+        invalid[offset] = replacement;
+        segments.push(invalid);
+    }
+
+    let mut trailing = attributes[4..].to_vec();
+
+    trailing.extend_from_slice(b"location");
+    segments.push(jpeg_segment(0xe2, &trailing));
+
+    for segment in segments {
+        let mut jpeg = hdr_with_secondary_mpf(&segment);
+        let original = jpeg.clone();
+
+        assert!(strip_in_place(&mut jpeg, MetadataFormat::Jpeg).is_err());
+        assert_eq!(jpeg, original);
+    }
+}
+
 #[test]
 fn mixed_or_spoofed_hdr_xmp_is_rejected_before_changing_the_payload() {
     for extra in [
