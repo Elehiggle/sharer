@@ -121,9 +121,9 @@ Generated captures are saved locally by default under your Pictures directory in
 | Region capture      | `Control+PrintScreen`       |
 | Region recording    | `Control+Shift+PrintScreen` |
 | Full-screen capture | `PrintScreen`               |
-| Clipboard upload    | `Control+Shift+V`           |
+| Clipboard upload    | Disabled                   |
 
-Every shortcut can be changed under **Settings → Capture**.
+Every shortcut can be changed under **Settings → Capture**. Clipboard upload has no global shortcut by default. Upload explicitly from the app or tray menu, or assign a shortcut to enable it.
 
 ## CLI
 

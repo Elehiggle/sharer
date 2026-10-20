@@ -315,7 +315,7 @@ impl Default for ShortcutConfig {
             region: "control+PrintScreen".to_owned(),
             recording: "control+shift+PrintScreen".to_owned(),
             screen: "PrintScreen".to_owned(),
-            clipboard: "control+shift+V".to_owned(),
+            clipboard: String::new(),
         }
     }
 }
@@ -568,6 +568,7 @@ mod tests {
 
         assert!(config.behavior.save_captures);
         assert!(!config.behavior.auto_upload_captures);
+        assert!(config.shortcuts.clipboard.is_empty());
         assert_eq!(config.behavior.tray_click_action, TrayClickAction::Region);
         assert_eq!(config.capture_naming.mode, CaptureNameMode::ActiveWindow);
         assert!(config.capture_naming.custom_name.is_empty());
