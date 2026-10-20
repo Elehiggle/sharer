@@ -597,6 +597,47 @@ fn repaint_sequence_invalidates_the_entire_software_surface() {
 }
 
 #[test]
+fn gui_endpoint_edits_clear_saved_headers_and_queued_targets_keep_their_destination() {
+    use crate::views::settings;
+    use sharer::config::AppConfig;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let config = AppConfig {
+        uploader_url: "https://uploads.example/upload".to_owned(),
+        upload_header_name: "X-Api-Key".to_owned(),
+        upload_header_value: "fake-saved-secret".to_owned(),
+        upload_header_endpoint: Some("https://uploads.example/upload".to_owned()),
+        ..AppConfig::default()
+    };
+
+    settings::initialize(&window, &config);
+    settings::wire_dirty_callback(&window, &Rc::new(RefCell::new(config)));
+    let queued = settings::upload_target_from_window(&window).unwrap();
+
+    // A raw property update cannot authorize the saved header for a new target.
+    window.set_uploader_url("https://other.example/upload".into());
+    assert!(settings::upload_target_from_window(&window).is_err());
+
+    // The endpoint field's edit callback clears the old credentials immediately.
+    window.invoke_custom_endpoint_edited();
+    assert!(window.get_upload_header_name().is_empty());
+    assert!(window.get_upload_header_value().is_empty());
+    assert!(settings::upload_target_from_window(&window).is_ok());
+    assert_eq!(queued.custom_url, "https://uploads.example/upload");
+    assert_eq!(queued.header_value, "fake-saved-secret");
+    assert!(queued.validate().is_ok());
+
+    window.set_upload_header_name("X-Api-Key".into());
+    window.set_upload_header_value("fake-new-secret".into());
+    window.invoke_custom_header_edited();
+    let target = settings::upload_target_from_window(&window).unwrap();
+
+    assert_eq!(target.header_endpoint, "https://other.example/upload");
+    assert_eq!(target.header_value, "fake-new-secret");
+}
+
+#[test]
 fn repeated_hover_does_not_trigger_redundant_snap_updates() {
     let last = Cell::new(None);
     let window = Some([0.1, 0.2, 0.3, 0.4]);

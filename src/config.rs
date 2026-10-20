@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     DEFAULT_RECORDING_SECONDS, MAX_LIFETIME_SECONDS,
     storage::Storage,
-    upload::{UploadTarget, UploaderKind},
+    upload::{UploadTarget, UploaderKind, canonical_uploader_endpoint},
     validate_lifetime, validate_recording_fps, validate_recording_seconds,
 };
 
@@ -25,6 +25,9 @@ pub struct AppConfig {
     pub uploader_credentials: ProviderCredentials,
     pub upload_header_name: String,
     pub upload_header_value: String,
+    /// Authorized destination; absent only in configurations predating endpoint binding.
+    #[serde(default)]
+    pub upload_header_endpoint: Option<String>,
     pub lifetime_seconds: u32,
     pub recording_fps: u32,
     pub recording_max_seconds: u32,
@@ -332,6 +335,11 @@ impl AppConfig {
         let mut config =
             serde_json::from_slice::<Self>(&contents).context("failed to decode configuration")?;
 
+        if config.upload_header_endpoint.is_none() {
+            config.upload_header_endpoint =
+                Some(canonical_uploader_endpoint(&config.uploader_url).unwrap_or_default());
+        }
+
         if validate_lifetime(config.lifetime_seconds).is_err() {
             config.lifetime_seconds = DEFAULT_LIFETIME_SECONDS;
         }
@@ -398,6 +406,7 @@ impl AppConfig {
             credential: self.uploader_credentials.for_provider(kind).to_owned(),
             header_name: self.upload_header_name.clone(),
             header_value: self.upload_header_value.clone(),
+            header_endpoint: self.upload_header_endpoint.clone().unwrap_or_default(),
         }
     }
 }
@@ -410,6 +419,7 @@ impl Default for AppConfig {
             uploader_credentials: ProviderCredentials::default(),
             upload_header_name: String::new(),
             upload_header_value: String::new(),
+            upload_header_endpoint: Some(String::new()),
             lifetime_seconds: DEFAULT_LIFETIME_SECONDS,
             recording_fps: DEFAULT_RECORDING_FPS,
             recording_max_seconds: DEFAULT_RECORDING_SECONDS,
@@ -442,6 +452,13 @@ impl fmt::Debug for AppConfig {
             )
             .field("upload_header_name", &self.upload_header_name)
             .field("upload_header_value", &"[redacted]")
+            .field(
+                "upload_header_endpoint_configured",
+                &self
+                    .upload_header_endpoint
+                    .as_ref()
+                    .is_some_and(|endpoint| !endpoint.is_empty()),
+            )
             .field("lifetime_seconds", &self.lifetime_seconds)
             .field("recording_fps", &self.recording_fps)
             .field("recording_max_seconds", &self.recording_max_seconds)

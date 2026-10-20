@@ -15,7 +15,7 @@ use sharer::{
         capture_directory_needs_default, capture_directory_or_default, default_capture_directory,
         ensure_capture_directory,
     },
-    upload::{UploadTarget, UploaderKind},
+    upload::{UploadTarget, UploaderKind, canonical_uploader_endpoint},
     validate_lifetime, validate_recording_fps, validate_recording_seconds,
 };
 
@@ -38,6 +38,13 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     window.set_sul_credential(config.uploader_credentials.sul.clone().into());
     window.set_upload_header_name(config.upload_header_name.clone().into());
     window.set_upload_header_value(config.upload_header_value.clone().into());
+    window.set_upload_header_endpoint(
+        config
+            .upload_header_endpoint
+            .clone()
+            .unwrap_or_default()
+            .into(),
+    );
     window.set_minimize_to_tray(config.behavior.minimize_to_tray);
     window.set_start_at_login(config.behavior.start_at_login);
     window.set_capture_name_mode(config.capture_naming.mode.index());
@@ -103,6 +110,32 @@ pub(crate) fn wire_folder_callbacks(window: &AppWindow) {
 }
 
 pub(crate) fn wire_dirty_callback(window: &AppWindow, saved_config: &Rc<RefCell<AppConfig>>) {
+    let window_weak = window.as_weak();
+
+    window.on_custom_endpoint_edited(move || {
+        if let Some(window) = window_weak.upgrade() {
+            let endpoint = canonical_uploader_endpoint(window.get_uploader_url().as_str());
+
+            if endpoint.as_deref().ok() != Some(window.get_upload_header_endpoint().as_str()) {
+                window.set_upload_header_name("".into());
+                window.set_upload_header_value("".into());
+                window.set_upload_header_endpoint("".into());
+            }
+        }
+    });
+
+    let window_weak = window.as_weak();
+
+    window.on_custom_header_edited(move || {
+        if let Some(window) = window_weak.upgrade() {
+            window.set_upload_header_endpoint(
+                canonical_uploader_endpoint(window.get_uploader_url().as_str())
+                    .unwrap_or_default()
+                    .into(),
+            );
+        }
+    });
+
     let window_weak = window.as_weak();
     let saved_config = Rc::clone(saved_config);
 
@@ -207,6 +240,7 @@ pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
         },
         upload_header_name: uploader.header_name,
         upload_header_value: uploader.header_value,
+        upload_header_endpoint: Some(uploader.header_endpoint),
         lifetime_seconds,
         recording_fps: validated_recording_fps(window)?,
         recording_max_seconds: validated_recording_seconds(window)?,
@@ -255,6 +289,7 @@ fn upload_target_values_from_window(window: &AppWindow) -> Result<UploadTarget> 
         .to_owned(),
         header_name: window.get_upload_header_name().trim().to_owned(),
         header_value: window.get_upload_header_value().to_string(),
+        header_endpoint: window.get_upload_header_endpoint().to_string(),
     };
 
     Ok(target)

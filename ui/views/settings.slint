@@ -63,6 +63,8 @@ export component SettingsView inherits Rectangle {
     in-out property <string> sul-credential;
     in-out property <string> upload-header-name;
     in-out property <string> upload-header-value;
+    callback custom-endpoint-edited();
+    callback custom-header-edited();
     in-out property <int> lifetime-seconds;
     in-out property <int> recording-fps;
     in-out property <int> recording-max-seconds;
@@ -159,11 +161,11 @@ export component SettingsView inherits Rectangle {
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                             }
                             if root.uploader-kind == 0: FormRow { label: "Endpoint"; label-width: root.label-width;
-                                CompactField { text <=> root.uploader-url; placeholder-text: "https://example.com/upload"; }
+                                CompactField { text <=> root.uploader-url; placeholder-text: "https://example.com/upload"; edited => { root.custom-endpoint-edited(); } }
                             }
                             if root.uploader-kind == 0: FormRow { label: "Request header"; label-width: root.label-width;
-                                CompactField { width: 176px; text <=> root.upload-header-name; placeholder-text: "Name (optional)"; }
-                                CompactField { text <=> root.upload-header-value; placeholder-text: "Value"; input-type: InputType.password; }
+                                CompactField { width: 176px; text <=> root.upload-header-name; placeholder-text: "Name (optional)"; edited => { root.custom-header-edited(); } }
+                                CompactField { text <=> root.upload-header-value; placeholder-text: "Value"; input-type: InputType.password; edited => { root.custom-header-edited(); } }
                             }
                             if root.uploader-kind == 1: FormRow { label: "Client ID"; label-width: root.label-width; CompactField { text <=> root.imgur-credential; placeholder-text: "Required"; input-type: InputType.password; } }
                             if root.uploader-kind == 2: FormRow { label: "User key"; label-width: root.label-width; CompactField { text <=> root.vgy-credential; placeholder-text: "Optional"; input-type: InputType.password; } }

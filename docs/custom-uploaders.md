@@ -14,11 +14,15 @@ ShareR --init https://uploads.example/upload --header "Authorization: Bearer tok
 
 The header value is stored in ShareR's private per-user database. It is never written to logs.
 
+Headers are bound to the endpoint where they were configured, including its scheme, host, port, path, and query parameters. Equivalent URL spellings (such as the default HTTPS port) share the same binding; fragments are ignored. Changing the endpoint clears the old header. Re-enter the header to authorize it for the new endpoint. Existing saved headers are bound to their existing endpoint when loaded after upgrading.
+
 ## Request
 
 ShareR sends an HTTP `POST` with the file in a multipart field named `file`. The configured lifetime is added as a `time` query parameter in seconds. Existing unrelated query parameters are preserved.
 
 Custom lifetimes can range from 1 second to 1 week.
+
+Uploads do not follow HTTP redirects. Configure the final upload endpoint directly. This applies to built-in providers as well as Custom uploaders.
 
 ## Response
 
@@ -47,6 +51,9 @@ The saved endpoint and request header can be replaced for one upload:
 ```bash
 ShareR archive.tar.zst --uploader-url https://other.example/upload
 ShareR archive.tar.zst --header "Authorization: Bearer token"
+ShareR archive.tar.zst --uploader-url https://other.example/upload --header "Authorization: Bearer other-token"
 ```
+
+An endpoint override does not forward a saved header to a different endpoint. An explicit `--header` authorizes that header for the endpoint used by this command.
 
 Use `ShareR --help` for the complete CLI reference.
