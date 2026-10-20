@@ -46,8 +46,11 @@ where
     let payload_result = prepare_job_source(source);
 
     capture_complete();
-    let (mut payload, save_directory) =
-        payload_result.map_err(|error| JobFailure::new(error, source_stage))?;
+    let PreparedSource {
+        mut payload,
+        save_directory,
+        warning: recording_warning,
+    } = payload_result.map_err(|error| JobFailure::new(error, source_stage))?;
 
     if should_remove_exif {
         payload
@@ -55,7 +58,11 @@ where
             .map_err(|error| JobFailure::new(error, source_stage))?;
     }
 
-    let (local_copy, capture_warning) = save_capture_copy(&mut payload, save_directory.as_deref());
+    let (local_copy, save_warning) = save_capture_copy(&mut payload, save_directory.as_deref());
+    let capture_warning = match (recording_warning, save_warning) {
+        (Some(recording), Some(save)) => Some(format!("{recording}; {save}")),
+        (recording, save) => recording.or(save),
+    };
     let captured_filename = payload.filename.clone();
     let captured_size = payload.len();
     let mut upload_failure = None;
@@ -159,16 +166,32 @@ fn save_capture_copy(
     }
 }
 
-fn prepare_job_source(source: JobSource) -> Result<(UploadPayload, Option<PathBuf>)> {
-    match source {
-        JobSource::File(path) => Ok((UploadPayload::from_path(&path)?, None)),
+struct PreparedSource {
+    payload: UploadPayload,
+    save_directory: Option<PathBuf>,
+    warning: Option<String>,
+}
 
-        JobSource::Clipboard => Ok((clipboard::read_payload()?, None)),
+impl PreparedSource {
+    fn new(payload: UploadPayload, save_directory: Option<PathBuf>) -> Self {
+        Self {
+            payload,
+            save_directory,
+            warning: None,
+        }
+    }
+}
+
+fn prepare_job_source(source: JobSource) -> Result<PreparedSource> {
+    match source {
+        JobSource::File(path) => Ok(PreparedSource::new(UploadPayload::from_path(&path)?, None)),
+
+        JobSource::Clipboard => Ok(PreparedSource::new(clipboard::read_payload()?, None)),
 
         JobSource::Prepared {
             payload,
             save_directory,
-        } => Ok((payload, save_directory)),
+        } => Ok(PreparedSource::new(payload, save_directory)),
 
         JobSource::RegionCapture {
             selection,
@@ -181,7 +204,7 @@ fn prepare_job_source(source: JobSource) -> Result<(UploadPayload, Option<PathBu
                 capture::capture_selected_region(&selection, capture_resolution, resize_quality)?;
 
             payload.filename = capture::named_capture_filename(&filename_stem, &payload.filename);
-            Ok((payload, save_directory))
+            Ok(PreparedSource::new(payload, save_directory))
         }
 
         JobSource::Recording {
@@ -192,8 +215,8 @@ fn prepare_job_source(source: JobSource) -> Result<(UploadPayload, Option<PathBu
             max_seconds,
             capture_resolution,
             save_directory,
-        } => Ok((
-            crate::recording::capture_region(
+        } => {
+            let recorded = crate::recording::capture_region(
                 region,
                 &stop,
                 &filename_stem,
@@ -203,9 +226,14 @@ fn prepare_job_source(source: JobSource) -> Result<(UploadPayload, Option<PathBu
                     capture_resolution,
                 },
                 Instant::now,
-            )?,
-            save_directory,
-        )),
+            )?;
+
+            Ok(PreparedSource {
+                payload: recorded.payload,
+                save_directory,
+                warning: recorded.warning,
+            })
+        }
     }
 }
 

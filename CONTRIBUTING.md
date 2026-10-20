@@ -103,6 +103,8 @@ These are tested boundaries, not aspirations:
 
 Closing to the tray drops the Slint component and rendered history model. Allocator and operating-system working-set pages may remain resident after those objects are freed.
 
+Animated recording encodes one bounded frame at a time into a temporary file. RGBA input is limited to 32 MiB per frame, and encoded output is limited to 256 MiB; this does not promise a fixed process RSS ceiling.
+
 ## UI screenshots
 
 The README gallery is generated from the real desktop application against an isolated temporary database:

@@ -1,9 +1,10 @@
 //! Paginated upload-history presentation and row actions.
 
+#[cfg(any(windows, target_os = "macos"))]
+use std::process::Command;
 use std::{
     cell::RefCell,
     path::{Path, PathBuf},
-    process::Command,
     rc::Rc,
 };
 
