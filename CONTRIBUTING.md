@@ -24,7 +24,13 @@ Ubuntu needs the desktop development libraries first:
 sudo apt install libasound2-dev libayatana-appindicator3-dev libgbm-dev libgtk-3-dev libpipewire-0.3-dev libwayland-dev libxdo-dev libxkbcommon-dev
 ```
 
-On Windows, use the MSVC Rust toolchain and install Visual Studio Build Tools with the **Desktop development with C++** workload and a Windows SDK.
+On Windows, use the MSVC Rust toolchain and install Visual Studio Build Tools with the **Desktop development with C++** workload and a Windows SDK. The desktop build also needs:
+
+- CMake on `PATH` for the native UltraHDR and libjpeg-turbo build.
+- LLVM/libclang for `bindgen`; set `LIBCLANG_PATH` if `libclang.dll` is not found automatically.
+- Either an MSYS `patch` on `PATH` or `ULTRAHDR_SKIP_PATCHES=1`. The Windows CI sets the variable because the crate's patch only adds an opt-in threadless build, which the desktop build does not use.
+
+The headless build needs none of these.
 
 The macOS desktop build targets macOS 14 and is compiled separately for Apple silicon and Intel Macs.
 
@@ -78,7 +84,7 @@ Run `cargo fmt` before committing. The full gate used for a final check is liste
 
 ## Capture backends
 
-macOS uses ScreenCaptureKit for pixels, window metadata, and persistent recording streams. Region selection uses logical desktop coordinates, while capture output keeps native Retina pixels unless the user asks for logical size.
+macOS uses ScreenCaptureKit for full-display pixels, window metadata, and persistent recording streams. A static screen may produce idle callbacks without a new image, so recording retains the latest native sample until a new frame arrives. Interactive region screenshots use the system `screencapture` picker and currently ignore logical-size and resize-quality preferences. The recording selector currently presents the primary display; logical recording size uses ScreenCaptureKit's scaling rather than the screenshot resize filter.
 
 Windows uses Windows Graphics Capture. HDR detection combines the display's Advanced Color state with the captured pixel range before choosing SDR or Ultra HDR output.
 
@@ -104,7 +110,7 @@ These are tested boundaries, not aspirations:
 
 Closing to the tray drops the Slint component and rendered history model. Allocator and operating-system working-set pages may remain resident after those objects are freed.
 
-Animated recording encodes one bounded frame at a time into a temporary file. RGBA input is limited to 32 MiB per frame, and encoded output is limited to 256 MiB; this does not promise a fixed process RSS ceiling.
+Animated recording encodes one bounded frame at a time into a temporary file. RGBA input is limited to 32 MiB per frame. Encoded output is configurable from 1 to 3 GiB, below WebP's 32-bit container-size limit; this does not promise a fixed process RSS ceiling.
 
 ## UI screenshots
 
@@ -152,4 +158,14 @@ actionlint
 prettier --check "**/*.md"
 ```
 
+Keep LF line endings in Rust and shell files, as specified by `.gitattributes`. CRLF can produce false unused-dependency warnings in Rulewright and break shell scripts.
+
 For UI changes, regenerate the screenshots and inspect every affected view at the default and minimum supported window sizes.
+
+Windows CI runs the complete headless and desktop test suites, including redirected CLI output, per-user startup registration in a disposable non-startup registry subtree, and single-instance coordination. For native UI checks, use an isolated `SHARER_CONFIG_DIR` and a local test uploader; do not change the user's login registration or upload their captures.
+
+macOS CI runs the headless and desktop suites on both Apple silicon and Intel runners. Its capture tests cover retained static frames and Retina coordinate calculations without requiring screen-recording permission. The plist checks include native `plutil` and `PlistBuddy` round trips. These checks do not replace a real Mac session: verify permissions, a recording of an unchanged desktop longer than five seconds, Retina and secondary-display selection, tray behavior, and an actual sign-in. The startup switch currently checks the LaunchAgent file, not external `launchd` disable overrides.
+
+Check first-run, replay/cancel, reset, long error messages, and all history deletion choices at 100%, 150%, and 200% scale. A screenshot of a clean default page is not enough: exercise the result card after successful upload, local-save failure, and upload failure, and verify that settings retain exact lifetimes and credentials.
+
+Exercise History uploads against a local test server: success must update the original row without a duplicate, and failure or cancellation must preserve the original file and its result actions. Open the actual popup menus, including their conditional upload and deletion items; directly calling Rust callbacks does not test whether a Slint popup dispatches its action after closing. Check keyboard focus through setup and help popups on an interactive desktop.

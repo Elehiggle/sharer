@@ -28,7 +28,15 @@ ignore = []
 
 [rules.rust_ambient_syscall]
 enabled = true
-ignore = ["build.rs"]
+# Native adapters resolve the environment and own OS resources.
+# Business logic and pure formatting modules remain subject to this rule.
+ignore = [
+    "build.rs",
+    "src/app/native_renderer.rs",
+    "src/autostart.rs",
+    "src/single_instance.rs",
+    "src/storage.rs",
+]
 
 [rules.rust_ambiguous_unicode]
 enabled = true
@@ -93,7 +101,9 @@ ignore = []
 
 [rules.rust_busy_wait]
 enabled = true
-ignore = []
+# Rulewright 0.1.2 recognizes park(), but not park_timeout().
+# This listener parks when idle; dropping its guard unparks it for shutdown.
+ignore = ["src/single_instance.rs"]
 
 [rules.rust_catch_unwind]
 enabled = true
@@ -131,7 +141,8 @@ ignore = []
 
 [rules.rust_concrete_io_param]
 enabled = true
-ignore = []
+# The IPC guard owns a File lock and uses TcpStream-specific socket timeouts.
+ignore = ["src/single_instance.rs"]
 types = [
     "File",
     "Stdin",

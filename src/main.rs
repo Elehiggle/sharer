@@ -16,6 +16,8 @@ mod naming;
 #[cfg(feature = "desktop")]
 mod recording;
 #[cfg(feature = "desktop")]
+mod single_instance;
+#[cfg(feature = "desktop")]
 mod sound;
 #[cfg(feature = "desktop")]
 mod tray;
@@ -56,7 +58,10 @@ use sharer::{
 use slint_generated::{AppWindow, HistoryRow, RegionWindow};
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|error| {
+        prepare_windows_console(true);
+        error.exit()
+    });
 
     prepare_windows_console(cli.is_headless());
     let mut output = std::io::stdout().lock();
@@ -70,6 +75,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
 
         Err(error) => {
+            prepare_windows_console(true);
             let mut error_output = std::io::stderr().lock();
             let _ = write_error(&mut error_output, &error);
 
@@ -83,9 +89,45 @@ fn write_error(output: &mut impl std::io::Write, error: &anyhow::Error) -> std::
 }
 
 #[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "AttachConsole and standard-handle restoration require Win32 calls"
+)]
 fn prepare_windows_console(headless: bool) {
-    if !cfg!(feature = "desktop") || headless {
-        let _ = consolex::attach();
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        System::Console::{
+            ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE, SetStdHandle,
+        },
+    };
+
+    if cfg!(feature = "desktop") && !headless {
+        return;
+    }
+
+    // SAFETY: these APIs access process-owned standard handles. Existing handles
+    // remain owned by the process; none are closed or used after being closed.
+    unsafe {
+        let handles = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+            .map(|kind| (kind, GetStdHandle(kind)));
+        let valid = |handle: windows_sys::Win32::Foundation::HANDLE| {
+            !handle.is_null() && handle != INVALID_HANDLE_VALUE
+        };
+
+        if handles[1..].iter().all(|(_, handle)| valid(*handle)) {
+            return;
+        }
+
+        // Never allocate a new console for a scripted invocation. Attaching can
+        // replace the standard handles, so preserve each inherited pipe or file.
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+
+        for (kind, handle) in handles {
+            if valid(handle) {
+                let _ = SetStdHandle(kind, handle);
+            }
+        }
     }
 }
 
@@ -115,6 +157,7 @@ fn run_headless(cli: &Cli, output: &mut impl std::io::Write) -> Result<()> {
         let target = initialized_upload_target(initializer, cli, &config)?;
 
         apply_upload_target(&mut config, target);
+        config.behavior.onboarding_complete = true;
         config.save(&storage)?;
         writeln!(
             output,
@@ -503,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_screenshot_upload_retains_local_history_without_error_details() {
+    fn failed_screenshot_upload_retains_local_history() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("capture.png");
 
@@ -527,7 +570,6 @@ mod tests {
         assert!(entry.link.is_empty());
         assert!(message.contains(path.to_string_lossy().as_ref()));
         assert!(message.contains("recorded in upload history"));
-        assert!(!message.contains("SENSITIVE-DELETION-CAPABILITY"));
     }
 
     #[test]

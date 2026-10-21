@@ -16,13 +16,14 @@ use sharer::{
         ensure_capture_directory,
     },
     upload::{UploadTarget, UploaderKind, canonical_uploader_endpoint},
-    validate_lifetime, validate_recording_fps, validate_recording_seconds,
+    validate_lifetime, validate_recording_fps, validate_recording_gib, validate_recording_seconds,
 };
 
 pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     window.set_lifetime_seconds(config.lifetime_seconds.cast_signed());
     window.set_recording_fps(config.recording_fps.cast_signed());
     window.set_recording_max_seconds(config.recording_max_seconds.cast_signed());
+    window.set_recording_max_gib(config.recording_max_gib.cast_signed());
     window.set_save_captures(config.behavior.save_captures);
     window.set_auto_upload_captures(config.behavior.auto_upload_captures);
     window.set_force_sdr_captures(config.behavior.force_sdr_captures);
@@ -32,6 +33,7 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     window.set_remove_exif(config.privacy.remove_exif);
     window.set_capture_directory(config.capture_directory.clone().into());
     window.set_uploader_kind(config.uploader_kind.index());
+    window.set_uploader_name(config.uploader_kind.name().into());
     window.set_uploader_url(config.uploader_url.clone().into());
     window.set_imgur_credential(config.uploader_credentials.imgur.clone().into());
     window.set_vgy_credential(config.uploader_credentials.vgy.clone().into());
@@ -51,15 +53,22 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     window.set_capture_custom_name(config.capture_naming.custom_name.clone().into());
     window.set_require_tor(config.privacy.require_tor);
     window.set_completion_sound(config.behavior.completion_sound);
+    window.set_copy_link_after_upload(config.behavior.copy_link_after_upload);
     window.set_tray_click_action(config.behavior.tray_click_action.index());
     window.set_region_hotkey(config.shortcuts.region.clone().into());
     window.set_recording_hotkey(config.shortcuts.recording.clone().into());
     window.set_screen_hotkey(config.shortcuts.screen.clone().into());
     window.set_clipboard_hotkey(config.shortcuts.clipboard.clone().into());
+    set_shortcut_labels(window, &config.shortcuts);
     window.set_app_version(env!("CARGO_PKG_VERSION").into());
-    window.set_settings_dirty(false);
+    window.set_onboarding_complete(config.behavior.onboarding_complete);
+    initialize_wizard(window, config, false);
+    window.set_show_onboarding(!config.behavior.onboarding_complete);
 
-    if !config.behavior.auto_upload_captures {
+    if !config.behavior.onboarding_complete {
+        window.set_status_text("Welcome to ShareR".into());
+        window.set_status_detail("Choose where uploads go. You can change this later.".into());
+    } else if !config.behavior.auto_upload_captures {
         window.set_status_text("Ready".into());
         window.set_status_detail("Captures are saved locally and are not uploaded".into());
     } else if config.upload_target().validate().is_err() {
@@ -68,14 +77,155 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
         window.set_status_detail("Configure an uploader or disable automatic uploads".into());
     } else {
         window.set_status_text("Ready".into());
+        let retention = if config.uploader_kind.supports_lifetime() {
+            format!(
+                "Uploads expire after {}",
+                sharer::config::display_lifetime(config.lifetime_seconds)
+            )
+        } else {
+            format!("Retention managed by {}", config.uploader_kind.name())
+        };
+
         window.set_status_detail(
             format!(
-                "Uploads expire after {}  -  links are copied automatically",
-                sharer::config::display_lifetime(config.lifetime_seconds)
+                "{}  -  {}",
+                retention,
+                if config.behavior.copy_link_after_upload {
+                    "links are copied automatically"
+                } else {
+                    "copy the link from the last result"
+                }
             )
             .into(),
         );
     }
+
+    window.set_settings_dirty(false);
+}
+
+pub(crate) fn initialize_wizard(window: &AppWindow, config: &AppConfig, reset: bool) {
+    window.set_onboarding_reset(reset);
+    window.set_onboarding_step(0);
+    window.set_onboarding_error("".into());
+    window.set_wizard_provider(config.uploader_kind.index());
+    window.set_wizard_auto_upload(config.behavior.auto_upload_captures);
+    window.set_wizard_sound(config.behavior.completion_sound);
+    window.set_wizard_start_at_login(config.behavior.start_at_login);
+    window.set_wizard_imgur_credential(config.uploader_credentials.imgur.clone().into());
+    window.set_wizard_vgy_credential(config.uploader_credentials.vgy.clone().into());
+    window.set_wizard_sul_credential(config.uploader_credentials.sul.clone().into());
+    window.set_wizard_uploader_url(config.uploader_url.clone().into());
+    window.set_wizard_header_name(config.upload_header_name.clone().into());
+    window.set_wizard_header_value(config.upload_header_value.clone().into());
+    window.set_wizard_header_endpoint(
+        config
+            .upload_header_endpoint
+            .clone()
+            .unwrap_or_default()
+            .into(),
+    );
+    window.set_wizard_lifetime_seconds(config.lifetime_seconds.cast_signed());
+    window.set_wizard_save_captures(config.behavior.save_captures);
+    window.set_wizard_capture_directory(config.capture_directory.clone().into());
+}
+
+pub(crate) fn reset_preferences(config: &AppConfig) -> AppConfig {
+    AppConfig {
+        uploader_kind: config.uploader_kind,
+        uploader_url: config.uploader_url.clone(),
+        uploader_credentials: config.uploader_credentials.clone(),
+        upload_header_name: config.upload_header_name.clone(),
+        upload_header_value: config.upload_header_value.clone(),
+        upload_header_endpoint: config.upload_header_endpoint.clone(),
+        capture_directory: config.capture_directory.clone(),
+        ..AppConfig::default()
+    }
+}
+
+pub(crate) fn wizard_config_from_window(
+    window: &AppWindow,
+    saved: &AppConfig,
+) -> Result<AppConfig> {
+    let mut next = if window.get_onboarding_reset() {
+        reset_preferences(saved)
+    } else {
+        saved.clone()
+    };
+    let provider = window.get_wizard_provider();
+
+    if provider >= 0 {
+        next.uploader_kind = UploaderKind::from_index(provider).context("choose an uploader")?;
+
+        match next.uploader_kind {
+            UploaderKind::Custom => {
+                window
+                    .get_wizard_uploader_url()
+                    .trim()
+                    .clone_into(&mut next.uploader_url);
+                window
+                    .get_wizard_header_name()
+                    .trim()
+                    .clone_into(&mut next.upload_header_name);
+                window
+                    .get_wizard_header_value()
+                    .as_str()
+                    .clone_into(&mut next.upload_header_value);
+                next.upload_header_endpoint = Some(window.get_wizard_header_endpoint().to_string());
+                next.lifetime_seconds = u32::try_from(window.get_wizard_lifetime_seconds())
+                    .context("link lifetime must be a positive number of seconds")?;
+                validate_lifetime(next.lifetime_seconds)?;
+            }
+
+            UploaderKind::Imgur => {
+                window
+                    .get_wizard_imgur_credential()
+                    .trim()
+                    .clone_into(&mut next.uploader_credentials.imgur);
+            }
+
+            UploaderKind::Vgy => {
+                window
+                    .get_wizard_vgy_credential()
+                    .trim()
+                    .clone_into(&mut next.uploader_credentials.vgy);
+            }
+
+            UploaderKind::Sul => {
+                window
+                    .get_wizard_sul_credential()
+                    .trim()
+                    .clone_into(&mut next.uploader_credentials.sul);
+            }
+
+            UploaderKind::Uguu | UploaderKind::TransferSh => {}
+        }
+    }
+
+    next.behavior.auto_upload_captures = provider >= 0 && window.get_wizard_auto_upload();
+    next.behavior.save_captures |= !next.behavior.auto_upload_captures;
+    next.behavior.completion_sound = window.get_wizard_sound();
+    next.behavior.start_at_login = window.get_wizard_start_at_login();
+    next.behavior.onboarding_complete = true;
+    ensure_default_capture_directory(&mut next)?;
+
+    if provider >= 0 {
+        next.upload_target().validate()?;
+    }
+
+    Ok(next)
+}
+
+pub(crate) fn set_shortcut_labels(window: &AppWindow, shortcuts: &ShortcutConfig) {
+    window
+        .set_region_hotkey_label(sharer::presentation::display_shortcut(&shortcuts.region).into());
+    window.set_recording_hotkey_label(
+        sharer::presentation::display_shortcut(&shortcuts.recording).into(),
+    );
+    window
+        .set_screen_hotkey_label(sharer::presentation::display_shortcut(&shortcuts.screen).into());
+    window.set_clipboard_hotkey_label(
+        sharer::presentation::display_shortcut(&shortcuts.clipboard).into(),
+    );
 }
 
 pub(crate) fn wire_folder_callbacks(window: &AppWindow) {
@@ -137,6 +287,32 @@ pub(crate) fn wire_dirty_callback(window: &AppWindow, saved_config: &Rc<RefCell<
     });
 
     let window_weak = window.as_weak();
+
+    window.on_wizard_endpoint_edited(move || {
+        if let Some(window) = window_weak.upgrade() {
+            let endpoint = canonical_uploader_endpoint(window.get_wizard_uploader_url().as_str());
+
+            if endpoint.as_deref().ok() != Some(window.get_wizard_header_endpoint().as_str()) {
+                window.set_wizard_header_name("".into());
+                window.set_wizard_header_value("".into());
+                window.set_wizard_header_endpoint("".into());
+            }
+        }
+    });
+
+    let window_weak = window.as_weak();
+
+    window.on_wizard_header_edited(move || {
+        if let Some(window) = window_weak.upgrade() {
+            window.set_wizard_header_endpoint(
+                canonical_uploader_endpoint(window.get_wizard_uploader_url().as_str())
+                    .unwrap_or_default()
+                    .into(),
+            );
+        }
+    });
+
+    let window_weak = window.as_weak();
     let saved_config = Rc::clone(saved_config);
 
     window.on_settings_edited(move || {
@@ -161,12 +337,15 @@ fn upload_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
         || window.get_sul_credential().trim() != saved.uploader_credentials.sul
         || window.get_upload_header_name().trim() != saved.upload_header_name
         || window.get_upload_header_value().as_str() != saved.upload_header_value
+        || window.get_upload_header_endpoint().as_str()
+            != saved.upload_header_endpoint.as_deref().unwrap_or_default()
         || window.get_lifetime_seconds() != saved.lifetime_seconds.cast_signed()
 }
 
 fn capture_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
     window.get_recording_fps() != saved.recording_fps.cast_signed()
         || window.get_recording_max_seconds() != saved.recording_max_seconds.cast_signed()
+        || window.get_recording_max_gib() != saved.recording_max_gib.cast_signed()
         || window.get_save_captures() != saved.behavior.save_captures
         || window.get_auto_upload_captures() != saved.behavior.auto_upload_captures
         || window.get_force_sdr_captures() != saved.behavior.force_sdr_captures
@@ -186,6 +365,7 @@ fn general_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
     window.get_minimize_to_tray() != saved.behavior.minimize_to_tray
         || window.get_start_at_login() != saved.behavior.start_at_login
         || window.get_completion_sound() != saved.behavior.completion_sound
+        || window.get_copy_link_after_upload() != saved.behavior.copy_link_after_upload
         || window.get_tray_click_action() != saved.behavior.tray_click_action.index()
         || window.get_region_hotkey().as_str() != saved.shortcuts.region
         || window.get_recording_hotkey().as_str() != saved.shortcuts.recording
@@ -195,7 +375,7 @@ fn general_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
 
 pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
     let lifetime_seconds = u32::try_from(window.get_lifetime_seconds())
-        .context("lifetime must be a positive number")?;
+        .context("link lifetime must be a positive number of seconds")?;
 
     validate_lifetime(lifetime_seconds)?;
     let uploader = upload_target_values_from_window(window)?;
@@ -244,6 +424,7 @@ pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
         lifetime_seconds,
         recording_fps: validated_recording_fps(window)?,
         recording_max_seconds: validated_recording_seconds(window)?,
+        recording_max_gib: validated_recording_gib(window)?,
         capture_directory,
         capture_naming,
         shortcuts,
@@ -256,6 +437,8 @@ pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
             minimize_to_tray: window.get_minimize_to_tray(),
             start_at_login: window.get_start_at_login(),
             completion_sound: window.get_completion_sound(),
+            copy_link_after_upload: window.get_copy_link_after_upload(),
+            onboarding_complete: window.get_onboarding_complete(),
             tray_click_action,
         },
         privacy: PrivacyConfig {
@@ -323,6 +506,14 @@ pub(crate) fn validated_recording_seconds(window: &AppWindow) -> Result<u32> {
 
     validate_recording_seconds(seconds)?;
     Ok(seconds)
+}
+
+pub(crate) fn validated_recording_gib(window: &AppWindow) -> Result<u32> {
+    let gib = u32::try_from(window.get_recording_max_gib())
+        .context("recording size limit must be positive")?;
+
+    validate_recording_gib(gib)?;
+    Ok(gib)
 }
 
 pub(crate) fn configured_capture_directory(window: &AppWindow) -> Result<Option<PathBuf>> {

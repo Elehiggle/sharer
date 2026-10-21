@@ -42,6 +42,7 @@ struct RegionUpload {
     use_snapped_window_name: bool,
     recording_fps: u32,
     recording_max_seconds: u32,
+    recording_max_gib: u32,
     capture_resolution: CaptureResolution,
     resize_quality: ResizeQuality,
     save_directory: Option<PathBuf>,
@@ -85,7 +86,7 @@ pub(super) fn start_screenshot(
         present_error(
             window,
             FailureStage::Settings,
-            "Enable local capture copies or automatic capture uploads",
+            super::CAPTURE_OUTPUT_REQUIRED,
         );
 
         return;
@@ -206,6 +207,46 @@ fn native_macos_screenshot() -> Result<Option<UploadPayload>> {
     }
 }
 
+fn recording_limits(window: &AppWindow, purpose: &RegionPurpose) -> Option<(u32, u32, u32)> {
+    if matches!(purpose, RegionPurpose::Screenshot) {
+        return Some((
+            sharer::MIN_RECORDING_FPS,
+            sharer::DEFAULT_RECORDING_SECONDS,
+            sharer::DEFAULT_RECORDING_GIB,
+        ));
+    }
+
+    let fps = match views::settings::validated_recording_fps(window) {
+        Ok(fps) => fps,
+
+        Err(error) => {
+            present_error(window, FailureStage::Settings, &error.to_string());
+
+            return None;
+        }
+    };
+    let seconds = match views::settings::validated_recording_seconds(window) {
+        Ok(seconds) => seconds,
+
+        Err(error) => {
+            present_error(window, FailureStage::Settings, &error.to_string());
+
+            return None;
+        }
+    };
+    let gib = match views::settings::validated_recording_gib(window) {
+        Ok(gib) => gib,
+
+        Err(error) => {
+            present_error(window, FailureStage::Settings, &error.to_string());
+
+            return None;
+        }
+    };
+
+    Some((fps, seconds, gib))
+}
+
 fn begin_region_selection(
     window: &AppWindow,
     sender: Sender<Job>,
@@ -213,6 +254,16 @@ fn begin_region_selection(
     cancellation: Arc<UploadCancellation>,
 ) {
     if window.get_busy() {
+        return;
+    }
+
+    if !window.get_auto_upload_captures() && !window.get_save_captures() {
+        present_error(
+            window,
+            FailureStage::Settings,
+            super::CAPTURE_OUTPUT_REQUIRED,
+        );
+
         return;
     }
 
@@ -228,27 +279,15 @@ fn begin_region_selection(
             uploader,
             lifetime_seconds,
             require_tor: window.get_require_tor(),
+            copy_link: window.get_copy_link_after_upload(),
         })
     } else {
         None
     };
-    let recording_fps = match views::settings::validated_recording_fps(window) {
-        Ok(recording_fps) => recording_fps,
-
-        Err(error) => {
-            present_error(window, FailureStage::Settings, &error.to_string());
-
-            return;
-        }
-    };
-    let recording_max_seconds = match views::settings::validated_recording_seconds(window) {
-        Ok(seconds) => seconds,
-
-        Err(error) => {
-            present_error(window, FailureStage::Settings, &error.to_string());
-
-            return;
-        }
+    let Some((recording_fps, recording_max_seconds, recording_max_gib)) =
+        recording_limits(window, &purpose)
+    else {
+        return;
     };
     let Ok(naming) = views::settings::naming_from_window(window) else {
         present_error(
@@ -308,6 +347,7 @@ fn begin_region_selection(
                     use_snapped_window_name,
                     recording_fps,
                     recording_max_seconds,
+                    recording_max_gib,
                     capture_resolution,
                     resize_quality: resize_quality(&window),
                     save_directory,
@@ -680,9 +720,14 @@ pub(super) fn toggle_recording(
     cancellation: Arc<UploadCancellation>,
 ) {
     if let Some(stop) = recording_stop.borrow_mut().take() {
-        let _ = stop.send(());
+        let requested = stop.send(()).is_ok();
 
         window.set_recording(false);
+
+        if !requested {
+            return;
+        }
+
         window.set_status_text("Encoding recording...".into());
         window.set_status_detail(
             if window.get_auto_upload_captures() {
@@ -816,6 +861,7 @@ fn start_region_recording(
                 filename_stem: upload.filename_stem.clone(),
                 frames_per_second: upload.recording_fps,
                 max_seconds: upload.recording_max_seconds,
+                max_gib: upload.recording_max_gib,
                 capture_resolution: upload.capture_resolution,
                 save_directory: upload.save_directory.clone(),
             },

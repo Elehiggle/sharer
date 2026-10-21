@@ -8,21 +8,26 @@ use std::{
 };
 
 use sharer::history::HistoryEntry;
+use sharer::storage::PlatformStorage;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PlatformError, WindowAdapter};
 use slint::winit_030::winit::{
     event::{ElementState, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
 };
-use slint::{ComponentHandle as _, PhysicalPosition, PhysicalSize};
+use slint::{ComponentHandle as _, Model as _, PhysicalPosition, PhysicalSize};
 
 use super::{
     ActivitySnapshot, AppWindow, CloseAction, CloseState, FailureStage, Job, JobCallbacks,
-    JobSource, QuitDecision, QuitState, RendererPreference, UploadOptions, UploadProgress,
-    close_action, force_full_repaint, invalidate_activity_local_path, job::receive_job,
-    process_job_with_history, quit_decision, region::snap_changed, renderer_name,
+    JobSource, QuitDecision, QuitState, UploadOptions, UploadProgress, close_action,
+    force_full_repaint, invalidate_activity_local_path,
+    job::receive_job,
+    native_renderer::{preferred_renderer, renderer_name},
+    process_job_with_history, quit_decision,
+    region::snap_changed,
     restore_event_requests_full_repaint, result_status, shortcut_event_should_capture,
 };
+use crate::cli::RendererPreference;
 use sharer::upload::{UploadCancellation, UploadPayload, UploadTarget, UploaderKind};
 
 thread_local! {
@@ -47,6 +52,7 @@ fn custom_upload(endpoint: String) -> UploadOptions {
         },
         lifetime_seconds: 60,
         require_tor: false,
+        copy_link: false,
     }
 }
 
@@ -71,7 +77,7 @@ fn prepared_capture(
     }
 }
 
-fn fake_upload_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {
+fn fake_upload_server(status: &str, body: &str) -> (String, thread::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let response = format!(
@@ -80,13 +86,526 @@ fn fake_upload_server(status: &str, body: &str) -> (String, thread::JoinHandle<(
     );
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0_u8; 4096];
-        let _ = stream.read(&mut request);
+
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 4096];
+
+        loop {
+            let count = stream.read(&mut chunk).unwrap();
+
+            assert_ne!(count, 0, "upload ended before its complete request body");
+            request.extend_from_slice(&chunk[..count]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .expect("upload must declare its content length");
+
+            if request.len() >= header_end + 4 + length {
+                break;
+            }
+        }
 
         stream.write_all(response.as_bytes()).unwrap();
+        request
     });
 
     (format!("http://{address}/upload"), server)
+}
+
+fn local_history_capture(directory: &std::path::Path, storage: &PlatformStorage) -> HistoryEntry {
+    local_history_file(directory, storage, "capture.png", &[1, 2, 3])
+}
+
+fn local_history_file(
+    directory: &std::path::Path,
+    storage: &PlatformStorage,
+    filename: &str,
+    bytes: &[u8],
+) -> HistoryEntry {
+    let captures = directory.join("captures");
+
+    std::fs::create_dir(&captures).unwrap();
+    let path = captures.join(filename);
+
+    std::fs::write(&path, bytes).unwrap();
+    let mut entry = HistoryEntry::local(
+        filename.to_owned(),
+        u64::try_from(bytes.len()).unwrap(),
+        &path,
+    );
+
+    entry.created_at = 123;
+    entry.id = storage.insert_history(&entry).unwrap();
+    entry
+}
+
+fn history_upload_job(
+    original: HistoryEntry,
+    endpoint: String,
+    cancellation: Arc<UploadCancellation>,
+) -> Job {
+    Job {
+        source: JobSource::History(original),
+        upload: Some(custom_upload(endpoint)),
+        remove_exif: false,
+        cancellation,
+        restore_window_after_capture: false,
+    }
+}
+
+fn initialize_test_history(
+    window: &AppWindow,
+    storage: &Rc<PlatformStorage>,
+) -> Rc<RefCell<crate::views::history::HistoryController>> {
+    let deleted: crate::views::history::LocalDeletionObserver = Rc::new(|_, _, _| {});
+    let removed: crate::views::history::HistoryRemovalObserver = Rc::new(|_, _| {});
+
+    crate::views::history::initialize(window, storage, false, &deleted, &removed).unwrap()
+}
+
+#[test]
+fn history_upload_uses_saved_settings_and_updates_original_without_changing_the_file() {
+    use crate::views::settings;
+    use sharer::config::AppConfig;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Rc::new(PlatformStorage::open_in(directory.path()).unwrap());
+    let bytes = include_bytes!("../../tests/fixtures/images/minnie_sdr_with_exif.jpg");
+    let original = local_history_file(directory.path(), &storage, "capture.jpg", bytes);
+    let path = std::path::Path::new(&original.local_path);
+    let captures = path.parent().unwrap();
+    let (endpoint, server) = fake_upload_server(
+        "200 OK",
+        r#"{"data":{"originalName":"capture.jpg","size":3,"link":"https://public.example/retry","deleteLink":"https://delete.example/retry-token","expiresAt":"soon"}}"#,
+    );
+    let mut saved = AppConfig {
+        uploader_kind: UploaderKind::Custom,
+        uploader_url: endpoint,
+        lifetime_seconds: 90,
+        capture_directory: directory
+            .path()
+            .join("must-not-be-created")
+            .to_string_lossy()
+            .into_owned(),
+        ..AppConfig::default()
+    };
+
+    saved.behavior.onboarding_complete = true;
+    saved.behavior.copy_link_after_upload = false;
+    saved.behavior.auto_upload_captures = false;
+    saved.privacy.remove_exif = true;
+    settings::initialize(&window, &saved);
+    let history = initialize_test_history(&window, &storage);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let cancellation = Arc::new(UploadCancellation::default());
+
+    super::wire_history_upload_callback(&window, &sender, &storage, &history, &cancellation);
+    window.set_current_page(1);
+    window.invoke_upload_history_local(window.get_history_rows().row_data(0).unwrap().action_token);
+    assert!(window.get_busy());
+    assert!(window.get_uploading());
+    assert_eq!(
+        window.get_current_page(),
+        0,
+        "show progress and cancellation"
+    );
+    let job = receive_job(&receiver, false).unwrap();
+    let progress = Arc::new(UploadProgress::new());
+    let result = process_job_with_history(
+        job,
+        &progress,
+        JobCallbacks {
+            persist_history: |entry: &mut HistoryEntry, original: Option<&HistoryEntry>| {
+                storage
+                    .complete_history_upload(original.unwrap(), entry)
+                    .unwrap();
+                None
+            },
+            capture_complete: || {},
+        },
+    )
+    .unwrap();
+    let request = server.join().unwrap();
+
+    assert!(request.starts_with(b"POST /upload?time=90 HTTP/1.1\r\n"));
+    let image_start = request
+        .windows(2)
+        .position(|part| part == b"\xff\xd8")
+        .unwrap();
+    let image_end = request
+        .windows(2)
+        .rposition(|part| part == b"\xff\xd9")
+        .unwrap()
+        + 2;
+
+    assert!(
+        metastrip::extract_metadata(&request[image_start..image_end])
+            .unwrap()
+            .exif
+            .is_none()
+    );
+    assert_eq!(storage.history_count().unwrap(), 1);
+    assert_eq!(
+        storage.history_entry(original.id).unwrap().unwrap(),
+        result.entry
+    );
+    assert_eq!(result.entry.id, original.id);
+    assert_eq!(result.entry.created_at, original.created_at);
+    assert_eq!(result.entry.local_path, original.local_path);
+    assert_eq!(result.entry.link, "https://public.example/retry");
+    assert_eq!(
+        result.entry.delete_url,
+        "https://delete.example/retry-token"
+    );
+    assert_eq!(result.local_copy.as_deref(), Some(path));
+    assert!(!result.clipboard_copied);
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    assert_eq!(std::fs::read_dir(captures).unwrap().count(), 1);
+    assert!(!std::path::Path::new(&saved.capture_directory).exists());
+    window.set_busy(false);
+    window.invoke_upload_history_local(window.get_history_rows().row_data(0).unwrap().action_token);
+    assert!(
+        receiver.try_recv().is_err(),
+        "a cached local row must not re-upload a saved link"
+    );
+}
+
+#[test]
+fn failed_and_cancelled_history_uploads_preserve_original_rows_files_and_local_actions() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+
+    for cancelled in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Rc::new(PlatformStorage::open_in(directory.path()).unwrap());
+        let original = local_history_capture(directory.path(), &storage);
+        let window = AppWindow::new().unwrap();
+        let history = initialize_test_history(&window, &storage);
+        let token = window.get_history_rows().row_data(0).unwrap().action_token;
+        let cancellation = Arc::new(UploadCancellation::default());
+        let (endpoint, server) = if cancelled {
+            cancellation.cancel();
+            ("http://127.0.0.1:1/upload".to_owned(), None)
+        } else {
+            let (endpoint, server) = fake_upload_server("503 Service Unavailable", "try later");
+
+            (endpoint, Some(server))
+        };
+        let result = process_job_with_history(
+            history_upload_job(original.clone(), endpoint, cancellation),
+            &Arc::new(UploadProgress::new()),
+            JobCallbacks {
+                persist_history: |_: &mut HistoryEntry, _: Option<&HistoryEntry>| {
+                    panic!("a failed history upload must not persist a new row")
+                },
+                capture_complete: || {},
+            },
+        )
+        .unwrap();
+
+        if let Some(server) = server {
+            server.join().unwrap();
+        }
+
+        if !cancelled {
+            let detail = super::result::upload_detail(&result, false);
+
+            assert!(
+                detail.contains("503"),
+                "the result must expose the server status, not only a generic upload failure"
+            );
+        }
+
+        assert_eq!(
+            result.upload_failure.unwrap().stage,
+            if cancelled {
+                FailureStage::UploadCancelled
+            } else {
+                FailureStage::Upload
+            }
+        );
+        assert_eq!(result.entry, original);
+        assert_eq!(
+            result.local_copy.as_deref(),
+            Some(std::path::Path::new(&original.local_path))
+        );
+        assert!(!result.clipboard_copied);
+        assert_eq!(storage.history_page(0, 25).unwrap(), vec![original.clone()]);
+        assert_eq!(std::fs::read(&original.local_path).unwrap(), [1, 2, 3]);
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("captures"))
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(
+            crate::views::history::local_upload_entry(&storage, &history, token.as_str()).unwrap(),
+            original,
+        );
+        assert_eq!(
+            window
+                .get_history_rows()
+                .row_data(0)
+                .unwrap()
+                .local_path
+                .as_str(),
+            original.local_path,
+        );
+    }
+}
+
+#[test]
+fn history_upload_preserves_new_links_when_original_changes_during_upload() {
+    for change in ["removed", "path cleared", "uploaded", "id reused"] {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = PlatformStorage::open_in(directory.path()).unwrap();
+        let concurrent = PlatformStorage::open_in(directory.path()).unwrap();
+        let original = local_history_capture(directory.path(), &storage);
+        let changed = RefCell::new(None);
+        let (endpoint, server) = fake_upload_server(
+            "200 OK",
+            r#"{"data":{"originalName":"capture.png","size":3,"link":"https://public.example/new","deleteLink":"https://delete.example/new-token","expiresAt":"soon"}}"#,
+        );
+        let result = process_job_with_history(
+            history_upload_job(
+                original.clone(),
+                endpoint,
+                Arc::new(UploadCancellation::default()),
+            ),
+            &Arc::new(UploadProgress::new()),
+            JobCallbacks {
+                persist_history: |entry: &mut HistoryEntry, original: Option<&HistoryEntry>| {
+                    storage
+                        .complete_history_upload(original.unwrap(), entry)
+                        .unwrap();
+                    None
+                },
+                capture_complete: || {
+                    match change {
+                        "removed" => concurrent.remove_history(original.id).unwrap(),
+
+                        "path cleared" => concurrent.clear_history_local_path(original.id).unwrap(),
+
+                        "uploaded" => {
+                            let mut other = original.clone();
+
+                            other.link = "https://public.example/other".into();
+                            other.delete_url = "https://delete.example/other-token".into();
+                            concurrent
+                                .complete_history_upload(&original, &mut other)
+                                .unwrap();
+                        }
+
+                        "id reused" => {
+                            concurrent.remove_history(original.id).unwrap();
+                            let mut other = original.clone();
+
+                            other.filename = "different-capture.png".into();
+                            assert_eq!(concurrent.insert_history(&other).unwrap(), original.id);
+                        }
+
+                        _ => unreachable!(),
+                    }
+
+                    *changed.borrow_mut() = concurrent.history_entry(original.id).unwrap();
+                },
+            },
+        )
+        .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(result.entry.link, "https://public.example/new");
+        assert_eq!(result.entry.delete_url, "https://delete.example/new-token");
+        assert_eq!(
+            storage.history_entry(result.entry.id).unwrap().unwrap(),
+            result.entry
+        );
+
+        if let Some(changed) = changed.borrow().as_ref() {
+            assert_ne!(result.entry.id, changed.id);
+            assert_eq!(
+                storage.history_entry(changed.id).unwrap().as_ref(),
+                Some(changed)
+            );
+            assert_eq!(storage.history_count().unwrap(), 2);
+        } else {
+            assert_eq!(storage.history_count().unwrap(), 1);
+        }
+
+        assert_eq!(std::fs::read(&original.local_path).unwrap(), [1, 2, 3]);
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("captures"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn history_upload_gates_reject_busy_unsaved_setup_stale_and_missing_sources() {
+    use crate::views::{history, settings};
+    use sharer::config::AppConfig;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Rc::new(PlatformStorage::open_in(directory.path()).unwrap());
+    let original = local_history_capture(directory.path(), &storage);
+    let mut saved = AppConfig {
+        uploader_kind: UploaderKind::Custom,
+        uploader_url: "http://127.0.0.1:1/upload".to_owned(),
+        ..AppConfig::default()
+    };
+
+    saved.behavior.onboarding_complete = true;
+    saved.behavior.copy_link_after_upload = false;
+    settings::initialize(&window, &saved);
+    let history = initialize_test_history(&window, &storage);
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    super::wire_history_upload_callback(
+        &window,
+        &sender,
+        &storage,
+        &history,
+        &Arc::new(UploadCancellation::default()),
+    );
+    let token = window.get_history_rows().row_data(0).unwrap().action_token;
+
+    for gate in ["busy", "settings", "setup"] {
+        window.set_busy(gate == "busy");
+        window.set_settings_dirty(gate == "settings");
+        window.set_show_onboarding(gate == "setup");
+        window.invoke_upload_history_local(token.clone());
+        assert!(receiver.try_recv().is_err(), "{gate}");
+        assert_eq!(
+            storage.history_entry(original.id).unwrap().as_ref(),
+            Some(&original)
+        );
+
+        if gate == "settings" {
+            assert_eq!(window.get_current_page(), 2);
+        }
+    }
+
+    window.set_busy(false);
+    window.set_settings_dirty(false);
+    window.set_show_onboarding(false);
+    history::refresh_current(&window, &storage, &history).unwrap();
+    window.invoke_upload_history_local(token);
+    assert!(
+        receiver.try_recv().is_err(),
+        "stale generation must not upload"
+    );
+    let token = window.get_history_rows().row_data(0).unwrap().action_token;
+
+    std::fs::remove_file(&original.local_path).unwrap();
+    window.invoke_upload_history_local(token.clone());
+    assert!(receiver.try_recv().is_err(), "missing file must not upload");
+    assert!(window.get_status_detail().contains("no longer exists"));
+    assert_eq!(
+        storage.history_entry(original.id).unwrap().as_ref(),
+        Some(&original)
+    );
+    std::fs::create_dir(&original.local_path).unwrap();
+    window.invoke_upload_history_local(token.clone());
+    assert!(receiver.try_recv().is_err(), "directories must not upload");
+    std::fs::remove_dir(&original.local_path).unwrap();
+    std::fs::write(&original.local_path, [1, 2, 3]).unwrap();
+    storage.clear_history_local_path(original.id).unwrap();
+    window.invoke_upload_history_local(token);
+    assert!(
+        receiver.try_recv().is_err(),
+        "changed local path must not upload"
+    );
+    history::refresh_current(&window, &storage, &history).unwrap();
+    window.invoke_upload_history_local(window.get_history_rows().row_data(0).unwrap().action_token);
+    assert!(
+        receiver.try_recv().is_err(),
+        "entries without local paths must not upload"
+    );
+    let mut removed = original.clone();
+
+    removed.id = storage.insert_history(&removed).unwrap();
+    history::refresh_current(&window, &storage, &history).unwrap();
+    let removed_token = window.get_history_rows().row_data(0).unwrap().action_token;
+
+    storage.remove_history(removed.id).unwrap();
+    window.invoke_upload_history_local(removed_token);
+    assert!(
+        receiver.try_recv().is_err(),
+        "removed entries must not upload"
+    );
+    let mut uploaded = original;
+
+    uploaded.link = "https://public.example/already-uploaded".into();
+    uploaded.id = storage.insert_history(&uploaded).unwrap();
+    history::refresh_current(&window, &storage, &history).unwrap();
+    let uploaded_id = uploaded.id.to_string();
+    let uploaded_token = window
+        .get_history_rows()
+        .iter()
+        .find(|row| row.entry_id == uploaded_id.as_str())
+        .unwrap()
+        .action_token;
+
+    window.invoke_upload_history_local(uploaded_token);
+    assert!(
+        receiver.try_recv().is_err(),
+        "uploaded entries must not upload"
+    );
+}
+
+#[test]
+fn history_upload_rechecks_missing_files_in_worker_and_enforces_session_proxy() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = PlatformStorage::open_in(directory.path()).unwrap();
+    let original = local_history_capture(directory.path(), &storage);
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    sender
+        .send(history_upload_job(
+            original.clone(),
+            "http://127.0.0.1:1/upload".into(),
+            Arc::new(UploadCancellation::default()),
+        ))
+        .unwrap();
+    let job = receive_job(&receiver, true).unwrap();
+
+    assert!(job.upload.as_ref().unwrap().require_tor);
+    std::fs::remove_file(&original.local_path).unwrap();
+    let error = process_job_with_history(
+        job,
+        &Arc::new(UploadProgress::new()),
+        JobCallbacks {
+            persist_history: |_: &mut HistoryEntry, _: Option<&HistoryEntry>| {
+                panic!("missing local files must not change history")
+            },
+            capture_complete: || {},
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.stage, FailureStage::Upload);
+    assert_eq!(
+        storage.history_entry(original.id).unwrap().as_ref(),
+        Some(&original)
+    );
+    assert_eq!(storage.history_count().unwrap(), 1);
 }
 
 #[test]
@@ -274,7 +793,7 @@ fn capture_completion_is_reported_before_local_persistence() {
         job,
         &Arc::new(UploadProgress::new()),
         JobCallbacks {
-            persist_history: |_entry: &mut HistoryEntry| {
+            persist_history: |_entry: &mut HistoryEntry, _original: Option<&HistoryEntry>| {
                 assert!(capture_complete.get());
                 None
             },
@@ -302,7 +821,7 @@ fn capture_completion_is_reported_when_preparation_fails() {
             job,
             &Arc::new(UploadProgress::new()),
             JobCallbacks {
-                persist_history: |_entry: &mut HistoryEntry| None,
+                persist_history: |_entry: &mut HistoryEntry, _original: Option<&HistoryEntry>| None,
                 capture_complete: || capture_complete.set(true),
             },
         )
@@ -363,7 +882,7 @@ fn completed_upload_and_local_copy_are_both_preserved() {
         ),
         &Arc::new(UploadProgress::new()),
         JobCallbacks {
-            persist_history: |entry: &mut HistoryEntry| {
+            persist_history: |entry: &mut HistoryEntry, _original: Option<&HistoryEntry>| {
                 persisted = true;
                 entry.id = 7;
                 None
@@ -382,6 +901,43 @@ fn completed_upload_and_local_copy_are_both_preserved() {
 }
 
 #[test]
+fn upload_without_clipboard_copy_retains_local_save_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let not_a_directory = directory.path().join("capture-root");
+
+    std::fs::write(&not_a_directory, b"not a directory").unwrap();
+    let (endpoint, server) = fake_upload_server(
+        "200 OK",
+        r#"{"data":{"originalName":"capture.png","size":3,"link":"https://public.example/capture","deleteLink":"https://public.example/delete/fake-token","expiresAt":"soon"}}"#,
+    );
+    let mut upload = custom_upload(endpoint);
+
+    upload.copy_link = false;
+    let result = process_job_with_history(
+        prepared_capture(
+            &not_a_directory,
+            upload,
+            Arc::new(UploadCancellation::default()),
+        ),
+        &Arc::new(UploadProgress::new()),
+        JobCallbacks {
+            persist_history: |_entry: &mut HistoryEntry, _original: Option<&HistoryEntry>| None,
+            capture_complete: || {},
+        },
+    )
+    .unwrap();
+
+    server.join().unwrap();
+    assert!(!result.entry.link.is_empty());
+    assert!(result.entry.local_path.is_empty());
+    assert!(result.local_copy.is_none());
+    assert!(result.capture_warning.is_some());
+    assert!(!result.clipboard_copied);
+    assert!(result.clipboard_warning.is_none());
+    assert!(result.upload_failure.is_none());
+}
+
+#[test]
 fn failed_upload_after_local_save_keeps_a_local_history_result() {
     let directory = tempfile::tempdir().unwrap();
     let (endpoint, server) = fake_upload_server("503 Service Unavailable", "try later");
@@ -394,7 +950,7 @@ fn failed_upload_after_local_save_keeps_a_local_history_result() {
         ),
         &Arc::new(UploadProgress::new()),
         JobCallbacks {
-            persist_history: |entry: &mut HistoryEntry| {
+            persist_history: |entry: &mut HistoryEntry, _original: Option<&HistoryEntry>| {
                 persisted = true;
                 entry.id = 8;
                 None
@@ -426,7 +982,7 @@ fn cancelled_upload_after_local_save_keeps_a_local_history_result() {
         ),
         &Arc::new(UploadProgress::new()),
         JobCallbacks {
-            persist_history: |_entry: &mut HistoryEntry| None,
+            persist_history: |_entry: &mut HistoryEntry, _original: Option<&HistoryEntry>| None,
             capture_complete: || {},
         },
     )
@@ -463,7 +1019,7 @@ fn local_copy_failure_is_reported_as_a_save_failure() {
         job,
         &Arc::new(UploadProgress::new()),
         JobCallbacks {
-            persist_history: |_entry: &mut HistoryEntry| {
+            persist_history: |_entry: &mut HistoryEntry, _original: Option<&HistoryEntry>| {
                 panic!("failed saves must not be persisted")
             },
             capture_complete: || {},
@@ -497,6 +1053,11 @@ fn result_and_error_labels_match_the_completed_stage() {
 #[test]
 fn renderer_selection_preserves_auto_and_software_fallbacks() {
     assert_eq!(renderer_name(RendererPreference::Auto), None);
+    assert_eq!(
+        preferred_renderer(RendererPreference::Auto, true),
+        Some("software")
+    );
+    assert_eq!(preferred_renderer(RendererPreference::Auto, false), None);
     assert_eq!(
         renderer_name(RendererPreference::Software),
         Some("software")
@@ -604,6 +1165,7 @@ fn gui_endpoint_edits_clear_saved_headers_and_queued_targets_keep_their_destinat
     slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
     let window = AppWindow::new().unwrap();
     let config = AppConfig {
+        uploader_kind: UploaderKind::Custom,
         uploader_url: "https://uploads.example/upload".to_owned(),
         upload_header_name: "X-Api-Key".to_owned(),
         upload_header_value: "fake-saved-secret".to_owned(),
@@ -638,6 +1200,26 @@ fn gui_endpoint_edits_clear_saved_headers_and_queued_targets_keep_their_destinat
 }
 
 #[test]
+fn gui_round_trips_recording_limits() {
+    use crate::views::settings;
+    use sharer::config::AppConfig;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+
+    settings::initialize(&window, &AppConfig::default());
+    window.set_recording_max_gib(3);
+    window.set_recording_max_seconds(3_600);
+    window.set_recording_fps(30);
+
+    let config = settings::config_from_window(&window).unwrap();
+
+    assert_eq!(config.recording_max_gib, 3);
+    assert_eq!(config.recording_max_seconds, 3_600);
+    assert_eq!(config.recording_fps, 30);
+}
+
+#[test]
 fn repeated_hover_does_not_trigger_redundant_snap_updates() {
     let last = Cell::new(None);
     let window = Some([0.1, 0.2, 0.3, 0.4]);
@@ -646,4 +1228,431 @@ fn repeated_hover_does_not_trigger_redundant_snap_updates() {
     assert!(!snap_changed(&last, window));
     assert!(snap_changed(&last, None));
     assert!(!snap_changed(&last, None));
+}
+
+#[test]
+fn capture_completion_releases_stop_control_and_failure_clears_receipt_capabilities() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = sharer::storage::PlatformStorage::open_in(directory.path()).unwrap();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let (stop_tx, _stop_rx) = std::sync::mpsc::channel();
+    let state = super::PollingState {
+        activity: Rc::new(RefCell::new(None)),
+        hotkeys: Rc::new(RefCell::new(None)),
+        job_tx: std::sync::mpsc::channel().0,
+        result_rx,
+        recording_stop: Rc::new(RefCell::new(Some(stop_tx))),
+        storage: Rc::new(storage),
+        tray: Rc::new(RefCell::new(None)),
+        ui: Rc::new(RefCell::new(None)),
+        update_rx: std::sync::mpsc::channel().1,
+        update_state: Rc::new(RefCell::new(None)),
+        upload_progress: Arc::new(UploadProgress::new()),
+        upload_cancellation: Arc::new(UploadCancellation::default()),
+        quit_after_job: Rc::new(Cell::new(false)),
+        instance_show_rx: std::sync::mpsc::channel().1,
+    };
+    let mut status = String::new();
+
+    window.set_busy(true);
+    window.set_recording(true);
+    result_tx
+        .send(super::JobResult::CaptureComplete {
+            restore_window: false,
+        })
+        .unwrap();
+    super::receive_job_result(&window, &state.result_rx, &state, &mut status);
+
+    assert!(!window.get_recording());
+    assert!(window.get_busy());
+    assert!(state.recording_stop.borrow().is_none());
+    window.set_last_link("https://public.example/previous".into());
+    window.set_last_local_path("previous.webp".into());
+    window.set_last_delete_url("https://delete.example/fake-capability".into());
+    window.set_last_delete_saved(true);
+    result_tx
+        .send(super::JobResult::Error {
+            message: "capture unavailable".to_owned(),
+            stage: FailureStage::Capture,
+        })
+        .unwrap();
+    super::receive_job_result(&window, &state.result_rx, &state, &mut status);
+
+    assert!(!window.get_busy());
+    assert!(window.get_last_link().is_empty());
+    assert!(window.get_last_local_path().is_empty());
+    assert!(window.get_last_delete_url().is_empty());
+    assert!(!window.get_last_delete_saved());
+    let activity = state.activity.borrow();
+    let activity = activity.as_ref().unwrap();
+
+    assert!(activity.link.is_empty());
+    assert!(activity.local_path.is_empty());
+    assert!(activity.delete_url.is_empty());
+    assert!(!activity.history_saved);
+}
+
+#[test]
+fn removing_latest_history_marks_its_receipt_unsaved_without_losing_recovery_links() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let activity = RefCell::new(Some(ActivitySnapshot {
+        entry_id: 7,
+        delete_url: "https://delete.example/fake-capability".to_owned(),
+        detail: String::new(),
+        history_saved: true,
+        link: "https://public.example/capture".to_owned(),
+        local_path: "capture.webp".to_owned(),
+        status: String::new(),
+    }));
+
+    super::apply_activity(&window, activity.borrow().as_ref().unwrap());
+    assert!(!super::result::invalidate_latest_history_saved(
+        &window, &activity, 8
+    ));
+    assert!(window.get_last_delete_saved());
+    assert!(activity.borrow().as_ref().unwrap().history_saved);
+    assert!(super::result::invalidate_latest_history_saved(
+        &window, &activity, 7
+    ));
+    assert!(!window.get_last_delete_saved());
+    assert!(!activity.borrow().as_ref().unwrap().history_saved);
+    assert!(!window.get_last_delete_url().is_empty());
+    assert!(!window.get_last_local_path().is_empty());
+    assert!(!window.get_last_link().is_empty());
+
+    window.set_last_delete_saved(true);
+    super::apply_activity(&window, activity.borrow().as_ref().unwrap());
+
+    assert!(!window.get_last_delete_saved());
+}
+
+#[test]
+fn setup_replay_cancel_preserves_saved_settings_and_invalid_drafts_are_recoverable() {
+    use crate::views::settings;
+    use sharer::config::{AppConfig, ProviderCredentials, ShortcutConfig};
+    use sharer::storage::{PlatformStorage, Storage as _};
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Rc::new(PlatformStorage::open_in(directory.path()).unwrap());
+    let mut saved = AppConfig {
+        uploader_kind: UploaderKind::Custom,
+        uploader_url: "https://uploads.example.test/upload".to_owned(),
+        upload_header_name: "X-Api-Key".to_owned(),
+        upload_header_value: "fake-saved-key".to_owned(),
+        upload_header_endpoint: Some("https://uploads.example.test/upload".to_owned()),
+        uploader_credentials: ProviderCredentials {
+            imgur: "fake-imgur-id".to_owned(),
+            vgy: "fake-vgy-key".to_owned(),
+            sul: "fake-sul-key".to_owned(),
+        },
+        capture_directory: directory.path().to_string_lossy().into_owned(),
+        shortcuts: ShortcutConfig {
+            region: String::new(),
+            recording: String::new(),
+            screen: String::new(),
+            clipboard: String::new(),
+        },
+        lifetime_seconds: 90,
+        ..AppConfig::default()
+    };
+
+    saved.behavior.onboarding_complete = true;
+    saved.behavior.completion_sound = false;
+    saved.save(storage.as_ref()).unwrap();
+    let saved_bytes = storage.read("application").unwrap();
+    let config = Rc::new(RefCell::new(saved.clone()));
+    let hotkeys = Rc::new(RefCell::new(None));
+    let hotkey_status = Rc::new(RefCell::new(String::new()));
+
+    settings::initialize(&window, &saved);
+    settings::wire_dirty_callback(&window, &config);
+    super::onboarding::wire_onboarding_callbacks(
+        &window,
+        &hotkeys,
+        &hotkey_status,
+        &config,
+        &storage,
+    );
+
+    window.invoke_onboarding_restart();
+    assert!(window.get_show_onboarding());
+    window.set_wizard_provider(-1);
+    window.set_wizard_start_at_login(true);
+    window.set_wizard_imgur_credential("unsaved-key".into());
+    window.invoke_onboarding_skip();
+    assert!(!window.get_show_onboarding());
+    assert_eq!(*config.borrow(), saved);
+    assert_eq!(storage.read("application").unwrap(), saved_bytes);
+    assert_eq!(window.get_imgur_credential().as_str(), "fake-imgur-id");
+    assert!(!window.get_start_at_login());
+
+    window.invoke_onboarding_restart();
+    window.set_wizard_uploader_url("not a URL".into());
+    window.invoke_wizard_endpoint_edited();
+    window.invoke_onboarding_continue();
+    assert_eq!(window.get_onboarding_step(), 0);
+    assert!(!window.get_onboarding_error().is_empty());
+    assert_eq!(storage.read("application").unwrap(), saved_bytes);
+    assert_eq!(window.get_upload_header_value().as_str(), "fake-saved-key");
+    window.set_wizard_uploader_url("https://other.example.test/upload".into());
+    window.invoke_wizard_endpoint_edited();
+    assert!(window.get_wizard_header_value().is_empty());
+    window.set_wizard_header_name("X-Api-Key".into());
+    window.set_wizard_header_value("fake-new-key".into());
+    window.invoke_wizard_header_edited();
+    window.invoke_onboarding_continue();
+    assert_eq!(window.get_onboarding_step(), 1);
+    window.invoke_onboarding_finish();
+    assert!(!window.get_show_onboarding());
+    let committed = AppConfig::load(storage.as_ref()).unwrap();
+
+    assert_eq!(committed.uploader_url, "https://other.example.test/upload");
+    assert_eq!(
+        committed.upload_header_endpoint.as_deref(),
+        Some(committed.uploader_url.as_str())
+    );
+    assert_eq!(committed.upload_header_value, "fake-new-key");
+    assert_eq!(committed.uploader_credentials, saved.uploader_credentials);
+    assert_eq!(committed.lifetime_seconds, 90);
+    assert!(!committed.behavior.completion_sound);
+}
+
+#[test]
+fn settings_reset_is_a_draft_and_preserves_connections_and_capture_folder() {
+    use crate::views::settings;
+    use sharer::config::AppConfig;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut saved = AppConfig {
+        uploader_kind: UploaderKind::Sul,
+        capture_directory: directory.path().to_string_lossy().into_owned(),
+        uploader_url: "https://uploads.example.test/upload".to_owned(),
+        upload_header_name: "X-Api-Key".to_owned(),
+        upload_header_value: "fake-key".to_owned(),
+        upload_header_endpoint: Some("https://uploads.example.test/upload".to_owned()),
+        ..AppConfig::default()
+    };
+
+    saved.uploader_credentials.sul = "fake-sul-key".to_owned();
+    saved.behavior.onboarding_complete = true;
+    saved.behavior.auto_upload_captures = false;
+    saved.behavior.completion_sound = false;
+    settings::initialize(&window, &saved);
+    let reset = settings::reset_preferences(&saved);
+
+    settings::initialize_wizard(&window, &reset, true);
+    let draft = settings::wizard_config_from_window(&window, &saved).unwrap();
+
+    assert_eq!(draft.uploader_kind, saved.uploader_kind);
+    assert_eq!(draft.uploader_credentials, saved.uploader_credentials);
+    assert_eq!(draft.uploader_url, saved.uploader_url);
+    assert_eq!(draft.upload_header_value, saved.upload_header_value);
+    assert_eq!(draft.upload_header_endpoint, saved.upload_header_endpoint);
+    assert_eq!(draft.capture_directory, saved.capture_directory);
+    assert!(draft.behavior.auto_upload_captures);
+    assert!(draft.behavior.completion_sound);
+    assert!(!window.get_auto_upload_captures());
+    assert!(!window.get_completion_sound());
+}
+
+#[test]
+fn first_run_local_only_exit_ignores_invalid_wizard_inputs() {
+    use crate::views::settings;
+    use sharer::config::AppConfig;
+    use sharer::storage::PlatformStorage;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Rc::new(PlatformStorage::open_in(directory.path()).unwrap());
+    let config = Rc::new(RefCell::new(AppConfig::default()));
+    let hotkeys = Rc::new(RefCell::new(None));
+    let hotkey_status = Rc::new(RefCell::new(String::new()));
+
+    settings::initialize(&window, &config.borrow());
+    super::onboarding::wire_onboarding_callbacks(
+        &window,
+        &hotkeys,
+        &hotkey_status,
+        &config,
+        &storage,
+    );
+    window.set_wizard_provider(0);
+    window.set_wizard_uploader_url("invalid".into());
+    window.set_wizard_start_at_login(true);
+    window.invoke_onboarding_skip();
+
+    let saved = AppConfig::load(storage.as_ref()).unwrap();
+
+    assert!(saved.behavior.onboarding_complete);
+    assert!(saved.behavior.save_captures);
+    assert!(!saved.behavior.auto_upload_captures);
+    assert!(!saved.behavior.start_at_login);
+    assert!(saved.uploader_url.is_empty());
+    assert!(!window.get_show_onboarding());
+}
+
+#[test]
+fn exact_lifetimes_survive_gui_edits_setup_and_queued_uploads() {
+    use crate::views::settings;
+    use sharer::config::AppConfig;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+
+    for seconds in [1, 60, 90, 5_400, 604_800] {
+        let window = AppWindow::new().unwrap();
+        let mut saved = AppConfig {
+            uploader_kind: UploaderKind::Custom,
+            uploader_url: "https://uploads.example.test/upload".to_owned(),
+            lifetime_seconds: seconds,
+            capture_directory: "captures-kept".to_owned(),
+            ..AppConfig::default()
+        };
+
+        saved.behavior.onboarding_complete = true;
+        settings::initialize(&window, &saved);
+        assert_eq!(window.get_lifetime_seconds(), seconds.cast_signed());
+        assert_eq!(super::valid_window_lifetime(&window), Some(seconds));
+        window.set_completion_sound(false);
+        assert_eq!(
+            settings::config_from_window(&window)
+                .unwrap()
+                .lifetime_seconds,
+            seconds
+        );
+        assert_eq!(
+            settings::wizard_config_from_window(&window, &saved)
+                .unwrap()
+                .lifetime_seconds,
+            seconds
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        super::queue_job(
+            &window,
+            &sender,
+            JobSource::Clipboard,
+            Arc::new(UploadCancellation::default()),
+        );
+        assert_eq!(
+            receiver
+                .try_recv()
+                .unwrap()
+                .upload
+                .unwrap()
+                .lifetime_seconds,
+            seconds
+        );
+    }
+}
+
+#[test]
+fn replay_supports_every_provider_and_local_only_keeps_connection_secrets() {
+    use crate::views::settings;
+    use sharer::config::{AppConfig, ProviderCredentials};
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut saved = AppConfig {
+        uploader_url: "https://uploads.example.test/upload".to_owned(),
+        upload_header_name: "X-Api-Key".to_owned(),
+        upload_header_value: "fake-custom-key".to_owned(),
+        upload_header_endpoint: Some("https://uploads.example.test/upload".to_owned()),
+        uploader_credentials: ProviderCredentials {
+            imgur: "fake-imgur-id".to_owned(),
+            vgy: "fake-vgy-key".to_owned(),
+            sul: "fake-sul-key".to_owned(),
+        },
+        capture_directory: directory.path().to_string_lossy().into_owned(),
+        ..AppConfig::default()
+    };
+
+    saved.behavior.onboarding_complete = true;
+    saved.behavior.save_captures = false;
+
+    for index in 0..=5 {
+        saved.uploader_kind = UploaderKind::from_index(index).unwrap();
+        settings::initialize_wizard(&window, &saved, false);
+        assert_eq!(window.get_wizard_provider(), index);
+        assert_eq!(
+            settings::wizard_config_from_window(&window, &saved).unwrap(),
+            saved
+        );
+    }
+
+    window.set_wizard_uploader_url("invalid-unsaved-endpoint".into());
+    window.set_wizard_sul_credential("unsaved-secret".into());
+    window.set_wizard_provider(-1);
+    let local = settings::wizard_config_from_window(&window, &saved).unwrap();
+
+    assert!(local.behavior.save_captures);
+    assert!(!local.behavior.auto_upload_captures);
+    assert_eq!(local.uploader_kind, saved.uploader_kind);
+    assert_eq!(local.uploader_credentials, saved.uploader_credentials);
+    assert_eq!(local.uploader_url, saved.uploader_url);
+    assert_eq!(local.upload_header_value, saved.upload_header_value);
+}
+
+#[test]
+fn unsaved_settings_and_open_setup_cannot_start_capture_or_upload_jobs() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+
+    window.set_settings_dirty(true);
+    assert!(!super::can_start_job(&window));
+    assert_eq!(window.get_current_page(), 2);
+    window.set_settings_dirty(false);
+    window.set_show_onboarding(true);
+    assert!(!super::can_start_job(&window));
+    window.set_show_onboarding(false);
+    window.set_busy(true);
+    assert!(!super::can_start_job(&window));
+    window.set_busy(false);
+    assert!(super::can_start_job(&window));
+}
+
+#[test]
+fn wizard_custom_headers_require_explicit_authorization_for_a_new_endpoint() {
+    use crate::views::settings;
+    use sharer::config::AppConfig;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let saved = AppConfig {
+        uploader_kind: UploaderKind::Custom,
+        uploader_url: "https://uploads.example.test/upload".to_owned(),
+        upload_header_name: "X-Api-Key".to_owned(),
+        upload_header_value: "fake-saved-key".to_owned(),
+        upload_header_endpoint: Some("https://uploads.example.test/upload".to_owned()),
+        capture_directory: "captures-kept".to_owned(),
+        ..AppConfig::default()
+    };
+
+    settings::initialize(&window, &saved);
+    settings::wire_dirty_callback(&window, &Rc::new(RefCell::new(saved.clone())));
+    window.set_wizard_uploader_url("https://other.example.test/upload".into());
+    assert!(settings::wizard_config_from_window(&window, &saved).is_err());
+    window.invoke_wizard_endpoint_edited();
+    assert!(window.get_wizard_header_value().is_empty());
+    assert!(settings::wizard_config_from_window(&window, &saved).is_ok());
+    window.set_wizard_header_name("X-Api-Key".into());
+    window.set_wizard_header_value("fake-new-key".into());
+    window.invoke_wizard_header_edited();
+    let authorized = settings::wizard_config_from_window(&window, &saved).unwrap();
+
+    assert_eq!(
+        authorized.upload_header_endpoint.as_deref(),
+        Some(authorized.uploader_url.as_str())
+    );
+    assert_eq!(authorized.upload_header_value, "fake-new-key");
+    assert_eq!(saved.upload_header_value, "fake-saved-key");
 }

@@ -2,7 +2,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    fmt::Write as _,
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -24,19 +23,17 @@ use slint::winit_030::winit::{
 
 use crate::{
     AppWindow,
-    cli::{DesktopOptions, RendererPreference},
-    hotkeys::{HotkeyAction, Hotkeys, captured_shortcut, shortcuts_enabled},
+    cli::DesktopOptions,
+    hotkeys::{HotkeyAction, Hotkeys, captured_shortcut},
     icon,
+    single_instance::{self, Acquire, RepeatLaunch},
     tray::{Tray, TrayAction},
     update::{UpdateCheck, spawn_check},
     views,
 };
 use sharer::{
     capture, clipboard,
-    config::{
-        AppConfig, CaptureResolution, ResizeQuality, ShortcutConfig, TrayClickAction,
-        display_lifetime,
-    },
+    config::{AppConfig, CaptureResolution, ResizeQuality, TrayClickAction, display_lifetime},
     history::HistoryEntry,
     proxy::{TorProxy, preferred_upload_route},
     storage::PlatformStorage,
@@ -50,10 +47,14 @@ use sharer::{
 const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const CAPTURE_HIDE_DELAY: Duration = Duration::from_millis(100);
+const CAPTURE_OUTPUT_REQUIRED: &str = "Enable local capture copies or automatic capture uploads";
 type RecordingControl = Rc<RefCell<Option<Sender<()>>>>;
 type UiSlot = Rc<RefCell<Option<UiSession>>>;
 
 mod job;
+mod native_renderer;
+mod onboarding;
+mod preferences;
 mod region;
 mod result;
 
@@ -62,8 +63,9 @@ use job::process_job_with_history;
 use job::spawn_worker;
 use result::{
     append_status_detail, apply_activity, apply_update, current_window,
-    invalidate_latest_local_path, promote_visible_transient_ui, receive_job_result, receive_update,
-    release_idle_transient_ui, release_requested_ui, update_upload_progress,
+    invalidate_latest_history_saved, invalidate_latest_local_path, promote_visible_transient_ui,
+    receive_job_result, receive_update, release_idle_transient_ui, release_requested_ui,
+    update_upload_progress,
 };
 #[cfg(test)]
 use result::{invalidate_activity_local_path, result_status};
@@ -84,6 +86,7 @@ struct CloseState {
 #[derive(Debug)]
 enum JobSource {
     File(PathBuf),
+    History(HistoryEntry),
     Clipboard,
     Prepared {
         payload: UploadPayload,
@@ -102,6 +105,7 @@ enum JobSource {
         filename_stem: String,
         frames_per_second: u32,
         max_seconds: u32,
+        max_gib: u32,
         capture_resolution: CaptureResolution,
         save_directory: Option<PathBuf>,
     },
@@ -121,6 +125,7 @@ struct UploadOptions {
     uploader: UploadTarget,
     lifetime_seconds: u32,
     require_tor: bool,
+    copy_link: bool,
 }
 
 struct PollingState {
@@ -137,6 +142,7 @@ struct PollingState {
     upload_progress: Arc<UploadProgress>,
     upload_cancellation: Arc<UploadCancellation>,
     quit_after_job: Rc<Cell<bool>>,
+    instance_show_rx: Receiver<()>,
 }
 
 #[derive(Clone)]
@@ -150,6 +156,7 @@ struct CallbackResources {
     recording_stop: RecordingControl,
     update_state: Rc<RefCell<Option<UpdateCheck>>>,
     upload_cancellation: Arc<UploadCancellation>,
+    tray_available: Rc<Cell<bool>>,
 }
 
 struct UiSession {
@@ -172,7 +179,9 @@ struct ActivitySnapshot {
 
 #[derive(Debug)]
 enum JobResult {
-    CaptureComplete,
+    CaptureComplete {
+        restore_window: bool,
+    },
     Success(Box<ProcessedUpload>),
     Error {
         message: String,
@@ -230,12 +239,6 @@ impl JobFailure {
 }
 
 #[derive(Debug)]
-struct UploadFailure {
-    message: String,
-    stage: FailureStage,
-}
-
-#[derive(Debug)]
 struct UploadProgress {
     active: AtomicBool,
     transferred: AtomicU64,
@@ -289,9 +292,10 @@ struct ProcessedUpload {
     entry: HistoryEntry,
     history_warning: Option<String>,
     clipboard_warning: Option<String>,
+    clipboard_copied: bool,
     local_copy: Option<PathBuf>,
     capture_warning: Option<String>,
-    upload_failure: Option<UploadFailure>,
+    upload_failure: Option<JobFailure>,
 }
 
 struct JobCallbacks<P, C> {
@@ -299,10 +303,31 @@ struct JobCallbacks<P, C> {
     capture_complete: C,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "desktop startup wires the window, tray, hotkeys, worker, and update check in one place"
+)]
 pub fn run(options: DesktopOptions) -> Result<()> {
-    select_renderer(options.renderer)?;
+    let config_dir = sharer::storage::config_directory()?;
+    let repeat_launch = if options.require_tor {
+        RepeatLaunch::RequireProxy
+    } else if options.show_on_start {
+        RepeatLaunch::Show
+    } else {
+        RepeatLaunch::KeepHidden
+    };
+    let (_instance_guard, instance_show_rx) =
+        match single_instance::acquire(&config_dir, repeat_launch)? {
+            Acquire::Primary {
+                _guard: guard,
+                show_rx,
+            } => (guard, show_rx),
+            Acquire::AlreadyRunning => return Ok(()),
+        };
 
-    let storage = Rc::new(PlatformStorage::open()?);
+    native_renderer::select_renderer(options.renderer)?;
+
+    let storage = Rc::new(PlatformStorage::open_in(&config_dir)?);
     let mut config = AppConfig::load(storage.as_ref())?;
 
     views::settings::ensure_default_capture_directory(&mut config)?;
@@ -322,7 +347,8 @@ pub fn run(options: DesktopOptions) -> Result<()> {
     match Hotkeys::register(&config.borrow().shortcuts) {
         Ok(registered) => {
             *hotkeys.borrow_mut() = Some(registered);
-            shortcut_status(&config.borrow().shortcuts).clone_into(&mut hotkey_status.borrow_mut());
+            preferences::shortcut_status(&config.borrow().shortcuts)
+                .clone_into(&mut hotkey_status.borrow_mut());
         }
 
         Err(error) => {
@@ -353,6 +379,7 @@ pub fn run(options: DesktopOptions) -> Result<()> {
         recording_stop: Rc::clone(&recording_stop),
         update_state: Rc::clone(&update_state),
         upload_cancellation: Arc::clone(&upload_cancellation),
+        tray_available: Rc::new(Cell::new(false)),
     };
     let ui = Rc::new(RefCell::new(None));
     let tray = Rc::new(RefCell::new(None));
@@ -370,6 +397,7 @@ pub fn run(options: DesktopOptions) -> Result<()> {
         upload_progress,
         upload_cancellation,
         quit_after_job,
+        instance_show_rx,
     };
 
     if options.show_on_start {
@@ -384,11 +412,18 @@ pub fn run(options: DesktopOptions) -> Result<()> {
 
     // TrayIcon requires the native event loop to be running before construction.
     slint::Timer::single_shot(Duration::ZERO, move || match create_tray() {
-        Ok(created) => *tray_for_startup.borrow_mut() = Some(created),
+        Ok(created) => {
+            *tray_for_startup.borrow_mut() = Some(created);
+            resources_for_startup.tray_available.set(true);
+
+            if let Some(window) = current_window(&ui_for_startup) {
+                window.set_tray_available(true);
+            }
+        }
 
         Err(error) => match ensure_ui(&ui_for_startup, &resources_for_startup, false) {
             Ok(window) => {
-                window.set_minimize_to_tray(false);
+                window.set_tray_available(false);
                 window.set_status_detail(format!("System tray unavailable: {error:#}").into());
 
                 if !window.window().is_visible()
@@ -477,6 +512,7 @@ fn foreground_ui(window: &AppWindow) {
 
 fn foreground_native_window(native_window: &slint::winit_030::winit::window::Window) {
     native_window.set_minimized(false);
+    native_window.set_theme(Some(slint::winit_030::winit::window::Theme::Dark));
     native_window.focus_window();
     native_window.request_redraw();
 
@@ -489,34 +525,6 @@ fn foreground_native_window(native_window: &slint::winit_030::winit::window::Win
         if native_window.xdg_toplevel().is_some() {
             native_window.request_user_attention(Some(UserAttentionType::Informational));
         }
-    }
-}
-
-fn select_renderer(preference: RendererPreference) -> Result<()> {
-    let Some(renderer_name) = renderer_name(preference) else {
-        return Ok(());
-    };
-
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .renderer_name(renderer_name.into())
-        .select()
-        .with_context(|| format!("failed to initialize the {renderer_name} renderer"))
-}
-
-const fn renderer_name(preference: RendererPreference) -> Option<&'static str> {
-    match preference {
-        RendererPreference::Auto => None,
-        RendererPreference::Gpu => Some(platform_gpu_renderer()),
-        RendererPreference::Software => Some("software"),
-    }
-}
-
-const fn platform_gpu_renderer() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "skia"
-    } else {
-        "femtovg"
     }
 }
 
@@ -557,7 +565,7 @@ fn install_window_event_filter(window: &AppWindow, resources: &CallbackResources
 
         if matches!(event, WindowEvent::Focused(false)) {
             window.set_shortcut_recording(0);
-            restore_configured_hotkeys(&window, &hotkeys, &hotkey_status, &config);
+            preferences::restore_configured_hotkeys(&window, &hotkeys, &hotkey_status, &config);
 
             return EventResult::Propagate;
         }
@@ -571,7 +579,7 @@ fn install_window_event_filter(window: &AppWindow, resources: &CallbackResources
         }
 
         let PhysicalKey::Code(code) = event.physical_key else {
-            cancel_shortcut_recording(
+            preferences::cancel_shortcut_recording(
                 &window,
                 &hotkeys,
                 &hotkey_status,
@@ -583,7 +591,7 @@ fn install_window_event_filter(window: &AppWindow, resources: &CallbackResources
         };
 
         if code == KeyCode::Escape {
-            cancel_shortcut_recording(
+            preferences::cancel_shortcut_recording(
                 &window,
                 &hotkeys,
                 &hotkey_status,
@@ -595,9 +603,9 @@ fn install_window_event_filter(window: &AppWindow, resources: &CallbackResources
         }
 
         if matches!(code, KeyCode::Backspace | KeyCode::Delete) {
-            set_recorded_shortcut(&window, String::new());
+            preferences::set_recorded_shortcut(&window, String::new());
             window.set_shortcut_recording(0);
-            restore_configured_hotkeys(&window, &hotkeys, &hotkey_status, &config);
+            preferences::restore_configured_hotkeys(&window, &hotkeys, &hotkey_status, &config);
             window.set_status_detail("Shortcut disabled. Save changes to apply it.".into());
 
             return EventResult::PreventDefault;
@@ -605,15 +613,15 @@ fn install_window_event_filter(window: &AppWindow, resources: &CallbackResources
 
         match captured_shortcut(modifiers.get(), code) {
             Ok(Some(shortcut)) => {
-                set_recorded_shortcut(&window, shortcut);
+                preferences::set_recorded_shortcut(&window, shortcut);
                 window.set_shortcut_recording(0);
-                restore_configured_hotkeys(&window, &hotkeys, &hotkey_status, &config);
+                preferences::restore_configured_hotkeys(&window, &hotkeys, &hotkey_status, &config);
                 window.set_status_detail("Shortcut recorded. Save changes to apply it.".into());
             }
 
             Ok(None) => {}
 
-            Err(error) => cancel_shortcut_recording(
+            Err(error) => preferences::cancel_shortcut_recording(
                 &window,
                 &hotkeys,
                 &hotkey_status,
@@ -634,59 +642,6 @@ fn shortcut_event_should_capture(
     !repeat
         && (state == ElementState::Pressed
             || physical_key == PhysicalKey::Code(KeyCode::PrintScreen))
-}
-
-fn set_recorded_shortcut(window: &AppWindow, shortcut: String) {
-    let shortcut = shortcut.into();
-
-    match window.get_shortcut_recording() {
-        1 => window.set_region_hotkey(shortcut),
-        2 => window.set_recording_hotkey(shortcut),
-        3 => window.set_screen_hotkey(shortcut),
-        4 => window.set_clipboard_hotkey(shortcut),
-        _ => {}
-    }
-}
-
-fn cancel_shortcut_recording(
-    window: &AppWindow,
-    hotkeys: &Rc<RefCell<Option<Hotkeys>>>,
-    hotkey_status: &RefCell<String>,
-    config: &RefCell<AppConfig>,
-    detail: &str,
-) {
-    window.set_shortcut_recording(0);
-    restore_configured_hotkeys(window, hotkeys, hotkey_status, config);
-    window.set_status_detail(detail.into());
-}
-
-fn restore_configured_hotkeys(
-    window: &AppWindow,
-    hotkeys: &Rc<RefCell<Option<Hotkeys>>>,
-    hotkey_status: &RefCell<String>,
-    config: &RefCell<AppConfig>,
-) {
-    *hotkeys.borrow_mut() = None;
-    let config = config.borrow();
-    let status = match Hotkeys::register(&config.shortcuts) {
-        Ok(registered) => {
-            *hotkeys.borrow_mut() = Some(registered);
-            shortcut_status(&config.shortcuts).to_owned()
-        }
-
-        Err(error) => format!("Shortcuts unavailable: {error}"),
-    };
-
-    status.clone_into(&mut hotkey_status.borrow_mut());
-    window.set_hotkey_status(status.into());
-}
-
-fn shortcut_status(shortcuts: &ShortcutConfig) -> &'static str {
-    if shortcuts_enabled(shortcuts) {
-        "Shortcuts active"
-    } else {
-        "Shortcuts disabled"
-    }
 }
 
 fn restore_event_requests_full_repaint(
@@ -715,6 +670,7 @@ fn ensure_ui(ui: &UiSlot, resources: &CallbackResources, transient: bool) -> Res
         install_window_event_filter(&window, resources);
 
         views::settings::initialize(&window, &resources.config.borrow());
+        window.set_tray_available(resources.tray_available.get());
         window.set_hotkey_status(resources.hotkey_status.borrow().as_str().into());
 
         if !transient && let Some(activity) = resources.activity.borrow().as_ref() {
@@ -730,8 +686,17 @@ fn ensure_ui(ui: &UiSlot, resources: &CallbackResources, transient: bool) -> Res
             Rc::new(move |window, id, path| {
                 invalidate_latest_local_path(window, activity.as_ref(), id, path);
             });
-        let history =
-            views::history::initialize(&window, &resources.storage, transient, &local_deleted)?;
+        let activity = Rc::clone(&resources.activity);
+        let history_removed: views::history::HistoryRemovalObserver = Rc::new(move |window, id| {
+            invalidate_latest_history_saved(window, activity.as_ref(), id);
+        });
+        let history = views::history::initialize(
+            &window,
+            &resources.storage,
+            transient,
+            &local_deleted,
+            &history_removed,
+        )?;
         let close_requested = Rc::new(Cell::new(false));
 
         wire_callbacks(
@@ -804,13 +769,20 @@ fn wire_callbacks(
     close_requested: &Rc<Cell<bool>>,
 ) {
     views::settings::wire_folder_callbacks(window);
+    let activity = Rc::clone(&resources.activity);
+
+    window.on_receipt_cleared(move || {
+        activity.borrow_mut().take();
+    });
 
     let sender = job_tx.clone();
     let window_weak = window.as_weak();
     let cancellation = Arc::clone(&resources.upload_cancellation);
 
     window.on_capture_region(move || {
-        if let Some(window) = window_weak.upgrade() {
+        if let Some(window) = window_weak.upgrade()
+            && can_start_job(&window)
+        {
             region::start_screenshot(&window, sender.clone(), Arc::clone(&cancellation));
         }
     });
@@ -821,7 +793,9 @@ fn wire_callbacks(
     let cancellation = Arc::clone(&resources.upload_cancellation);
 
     window.on_record_region(move || {
-        if let Some(window) = window_weak.upgrade() {
+        if let Some(window) = window_weak.upgrade()
+            && (window.get_recording() || can_start_job(&window))
+        {
             region::toggle_recording(
                 &window,
                 &sender,
@@ -856,14 +830,28 @@ fn wire_callbacks(
         }
     });
 
+    wire_history_upload_callback(
+        window,
+        job_tx,
+        &resources.storage,
+        history,
+        &resources.upload_cancellation,
+    );
+
     let sender = job_tx.clone();
     let window_weak = window.as_weak();
     let cancellation = Arc::clone(&resources.upload_cancellation);
 
     window.on_choose_file(move || {
-        if let Some(path) = rfd::FileDialog::new().pick_file()
-            && let Some(window) = window_weak.upgrade()
-        {
+        let Some(window) = window_weak.upgrade() else {
+            return;
+        };
+
+        if !can_start_job(&window) {
+            return;
+        }
+
+        if let Some(path) = rfd::FileDialog::new().pick_file() {
             queue_job(
                 &window,
                 &sender,
@@ -894,7 +882,7 @@ fn wire_callbacks(
         &resources.config,
         &resources.storage,
     );
-    wire_close_callback(window, history, close_requested);
+    wire_close_callback(window, history, close_requested, &resources.config);
 }
 
 fn wire_last_result_callbacks(window: &AppWindow) {
@@ -905,7 +893,14 @@ fn wire_last_result_callbacks(window: &AppWindow) {
             let link = window.get_last_link();
 
             if !link.is_empty() {
-                let _ = open::that(link.as_str());
+                match open::that(link.as_str()) {
+                    Ok(()) => window.set_status_detail("Opened public link in the browser".into()),
+
+                    Err(_) => {
+                        window
+                            .set_status_detail("Could not open public link in the browser".into());
+                    }
+                }
             }
         }
     });
@@ -946,6 +941,20 @@ fn wire_last_result_callbacks(window: &AppWindow) {
                         );
                     }
                 }
+            }
+        }
+    });
+
+    let window_weak = window.as_weak();
+
+    window.on_open_last_delete(move || {
+        if let Some(window) = window_weak.upgrade() {
+            let link = window.get_last_delete_url();
+
+            if !link.is_empty() && views::history::confirm_deletion_page() {
+                window.set_status_detail(
+                    views::history::deletion_page_status(&open::that(link.as_str())).into(),
+                );
             }
         }
     });
@@ -993,7 +1002,17 @@ fn wire_management_callbacks(
     storage: &Rc<PlatformStorage>,
 ) {
     views::settings::wire_dirty_callback(window, config);
+    wire_update_and_shortcut_callbacks(window, hotkeys, hotkey_status, config);
+    preferences::wire_settings_callbacks(window, hotkeys, hotkey_status, config, storage);
+    onboarding::wire_onboarding_callbacks(window, hotkeys, hotkey_status, config, storage);
+}
 
+fn wire_update_and_shortcut_callbacks(
+    window: &AppWindow,
+    hotkeys: &Rc<RefCell<Option<Hotkeys>>>,
+    hotkey_status: &Rc<RefCell<String>>,
+    config: &Rc<RefCell<AppConfig>>,
+) {
     let window_weak = window.as_weak();
 
     window.on_open_update(move || {
@@ -1023,7 +1042,7 @@ fn wire_management_callbacks(
 
     window.on_shortcut_recording_finished(move || {
         if let Some(window) = window_weak.upgrade() {
-            restore_configured_hotkeys(
+            preferences::restore_configured_hotkeys(
                 &window,
                 &recording_hotkeys,
                 &recording_status,
@@ -1031,144 +1050,18 @@ fn wire_management_callbacks(
             );
         }
     });
-
-    let window_weak = window.as_weak();
-    let hotkeys = Rc::clone(hotkeys);
-    let hotkey_status = Rc::clone(hotkey_status);
-    let config = Rc::clone(config);
-    let storage = Rc::clone(storage);
-
-    window.on_save_settings(move || {
-        if let Some(window) = window_weak.upgrade() {
-            match views::settings::config_from_window(&window) {
-                Ok(next) => save_settings(
-                    &window,
-                    &hotkeys,
-                    &hotkey_status,
-                    &config,
-                    storage.as_ref(),
-                    next,
-                ),
-
-                Err(error) => {
-                    window.set_status_text("Settings not saved".into());
-                    window.set_status_detail(error.to_string().into());
-                }
-            }
-        }
-    });
-}
-
-fn save_settings(
-    window: &AppWindow,
-    hotkeys: &Rc<RefCell<Option<Hotkeys>>>,
-    hotkey_status: &RefCell<String>,
-    config: &RefCell<AppConfig>,
-    storage: &PlatformStorage,
-    next: AppConfig,
-) {
-    let previous = config.borrow().clone();
-    let startup_changed = next.behavior.start_at_login != previous.behavior.start_at_login;
-    let shortcuts_changed = next.shortcuts != previous.shortcuts;
-
-    if startup_changed
-        && let Err(error) = crate::autostart::set_enabled(next.behavior.start_at_login)
-    {
-        show_settings_error(window, &error.to_string());
-
-        return;
-    }
-
-    if shortcuts_changed
-        && let Err(error) = replace_hotkeys(hotkeys, &next.shortcuts, &previous.shortcuts)
-    {
-        if startup_changed {
-            let _ = crate::autostart::set_enabled(previous.behavior.start_at_login);
-        }
-
-        let status = if hotkeys.borrow().is_some() {
-            if shortcuts_enabled(&previous.shortcuts) {
-                format!("Previous shortcuts remain active: {error}")
-            } else {
-                format!("Shortcuts remain disabled: {error}")
-            }
-        } else {
-            format!("Shortcuts unavailable: {error}")
-        };
-
-        status.clone_into(&mut hotkey_status.borrow_mut());
-        window.set_hotkey_status(status.into());
-        show_settings_error(window, &error.to_string());
-
-        return;
-    }
-
-    if let Err(error) = next.save(storage) {
-        let rollback_error = shortcuts_changed
-            .then(|| replace_hotkeys(hotkeys, &previous.shortcuts, &next.shortcuts).err())
-            .flatten();
-
-        if startup_changed {
-            let _ = crate::autostart::set_enabled(previous.behavior.start_at_login);
-        }
-
-        let detail = rollback_error.as_ref().map_or_else(
-            || format!("Could not save settings: {error}"),
-            |rollback_error| {
-                format!(
-                    "Could not save settings: {error}; shortcut rollback failed: {rollback_error}"
-                )
-            },
-        );
-
-        if shortcuts_changed {
-            let status = if let Some(rollback_error) = rollback_error {
-                if hotkeys.borrow().is_some() {
-                    format!("Unsaved shortcuts remain active: {rollback_error}")
-                } else {
-                    format!("Shortcuts unavailable after rollback: {rollback_error}")
-                }
-            } else {
-                shortcut_status(&previous.shortcuts).to_owned()
-            };
-
-            status.clone_into(&mut hotkey_status.borrow_mut());
-            window.set_hotkey_status(status.into());
-        }
-
-        show_settings_error(window, &detail);
-
-        return;
-    }
-
-    window.set_capture_directory(next.capture_directory.clone().into());
-    *config.borrow_mut() = next;
-    window.set_settings_dirty(false);
-
-    if shortcuts_changed {
-        let status = shortcut_status(&config.borrow().shortcuts);
-
-        status.clone_into(&mut hotkey_status.borrow_mut());
-        window.set_hotkey_status(status.into());
-    }
-
-    window.set_status_text("Ready".into());
-    window.set_status_detail("Settings saved".into());
-}
-
-fn show_settings_error(window: &AppWindow, error: &str) {
-    window.set_status_text("Settings not saved".into());
-    window.set_status_detail(error.into());
 }
 
 fn wire_close_callback(
     window: &AppWindow,
     history: &Rc<RefCell<views::history::HistoryController>>,
     close_requested: &Rc<Cell<bool>>,
+    config: &Rc<RefCell<AppConfig>>,
 ) {
     let window_weak = window.as_weak();
     let history = Rc::clone(history);
     let close_requested = Rc::clone(close_requested);
+    let config = Rc::clone(config);
 
     window.window().on_close_requested(move || {
         let Some(window) = window_weak.upgrade() else {
@@ -1184,7 +1077,8 @@ fn wire_close_callback(
 
         let state = CloseState {
             busy: window.get_busy(),
-            minimize_to_tray: window.get_minimize_to_tray(),
+            minimize_to_tray: config.borrow().behavior.minimize_to_tray
+                && window.get_tray_available(),
         };
 
         match close_action(state) {
@@ -1224,12 +1118,30 @@ const fn close_action(state: CloseState) -> CloseAction {
     }
 }
 
+fn can_start_job(window: &AppWindow) -> bool {
+    if window.get_busy() || window.get_show_onboarding() {
+        return false;
+    }
+
+    if window.get_settings_dirty() {
+        window.set_current_page(2);
+        preferences::show_settings_error(
+            window,
+            "Save or discard your settings changes before capturing or uploading.",
+        );
+
+        return false;
+    }
+
+    true
+}
+
 fn queue_screenshot(
     window: &AppWindow,
     sender: &Sender<Job>,
     cancellation: Arc<UploadCancellation>,
 ) {
-    if window.get_busy() {
+    if !can_start_job(window) {
         return;
     }
 
@@ -1307,33 +1219,47 @@ fn queue_screenshot(
     });
 }
 
-fn replace_hotkeys(
-    hotkeys: &Rc<RefCell<Option<Hotkeys>>>,
-    shortcuts: &ShortcutConfig,
-    fallback: &ShortcutConfig,
-) -> Result<()> {
-    *hotkeys.borrow_mut() = None;
+fn wire_history_upload_callback(
+    window: &AppWindow,
+    sender: &Sender<Job>,
+    storage: &Rc<PlatformStorage>,
+    history: &Rc<RefCell<views::history::HistoryController>>,
+    cancellation: &Arc<UploadCancellation>,
+) {
+    let window_weak = window.as_weak();
+    let sender = sender.clone();
+    let storage = Rc::clone(storage);
+    let history = Rc::clone(history);
+    let cancellation = Arc::clone(cancellation);
 
-    match Hotkeys::register(shortcuts) {
-        Ok(registered) => {
-            *hotkeys.borrow_mut() = Some(registered);
-            Ok(())
+    window.on_upload_history_local(move |action_token| {
+        let Some(window) = window_weak.upgrade() else {
+            return;
+        };
+
+        if !can_start_job(&window) {
+            return;
         }
 
-        Err(error) => {
-            match Hotkeys::register(fallback) {
-                Ok(registered) => *hotkeys.borrow_mut() = Some(registered),
+        match views::history::local_upload_entry(&storage, &history, action_token.as_str()) {
+            Ok(entry) => {
+                queue_job(
+                    &window,
+                    &sender,
+                    JobSource::History(entry),
+                    Arc::clone(&cancellation),
+                );
 
-                Err(fallback_error) => {
-                    return Err(error.context(format!(
-                        "previous shortcuts could not be restored: {fallback_error}"
-                    )));
+                if window.get_busy() {
+                    window.set_current_page(0);
                 }
             }
 
-            Err(error)
+            Err(error) => {
+                window.set_status_detail(format!("History action failed: {error:#}").into());
+            }
         }
-    }
+    });
 }
 
 fn queue_job(
@@ -1342,7 +1268,7 @@ fn queue_job(
     source: JobSource,
     cancellation: Arc<UploadCancellation>,
 ) {
-    if window.get_busy() {
+    if !can_start_job(window) {
         return;
     }
 
@@ -1368,6 +1294,7 @@ fn queue_job(
                 uploader,
                 lifetime_seconds,
                 require_tor: window.get_require_tor(),
+                copy_link: window.get_copy_link_after_upload(),
             }),
             remove_exif: window.get_remove_exif(),
             cancellation,
@@ -1389,7 +1316,7 @@ fn queue_capture_job(
     source: JobSource,
     cancellation: Arc<UploadCancellation>,
 ) {
-    if window.get_busy() {
+    if !can_start_job(window) {
         return;
     }
 
@@ -1405,17 +1332,14 @@ fn queue_capture_job(
             uploader,
             lifetime_seconds,
             require_tor: window.get_require_tor(),
+            copy_link: window.get_copy_link_after_upload(),
         })
     } else {
         None
     };
 
     if upload.is_none() && !window.get_save_captures() {
-        present_error(
-            window,
-            FailureStage::Settings,
-            "Enable local capture copies or automatic capture uploads",
-        );
+        present_error(window, FailureStage::Settings, CAPTURE_OUTPUT_REQUIRED);
 
         return;
     }
@@ -1467,6 +1391,7 @@ fn clear_last_receipt(window: &AppWindow) {
     window.set_last_local_path("".into());
     window.set_last_delete_url("".into());
     window.set_last_delete_saved(false);
+    window.invoke_receipt_cleared();
 }
 
 fn run_last_local_action(
@@ -1546,6 +1471,10 @@ fn start_polling(
         move || {
             release_requested_ui(&state.ui);
 
+            if state.instance_show_rx.try_recv().is_ok() {
+                let _ = open_ui(&state, &resources, false);
+            }
+
             #[cfg(target_os = "linux")]
             while gtk::glib::MainContext::default().pending() {
                 let _ = gtk::glib::MainContext::default().iteration(false);
@@ -1616,10 +1545,30 @@ fn handle_action(action: TrayAction, state: &PollingState, resources: &CallbackR
         return;
     }
 
+    let onboarding_pending = !resources.config.borrow().behavior.onboarding_complete;
+
+    if onboarding_pending && action != TrayAction::Show {
+        if let Ok(window) = ensure_ui(&state.ui, resources, false) {
+            window.set_show_onboarding(true);
+            let _ = show_ui(&state.ui, &window);
+        }
+
+        return;
+    }
+
     let transient = action != TrayAction::Show;
     let Ok(window) = ensure_ui(&state.ui, resources, transient) else {
         return;
     };
+
+    if action != TrayAction::Show
+        && !(action == TrayAction::Recording && window.get_recording())
+        && !can_start_job(&window)
+    {
+        let _ = show_ui(&state.ui, &window);
+
+        return;
+    }
 
     match action {
         TrayAction::Show => {
@@ -1739,6 +1688,7 @@ const fn quit_decision(state: QuitState) -> QuitDecision {
 }
 
 fn present_error(window: &AppWindow, stage: FailureStage, error: &str) {
+    clear_last_receipt(window);
     window.set_busy(false);
     window.set_uploading(false);
     window.set_status_text(stage.status().into());
