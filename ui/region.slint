@@ -53,16 +53,21 @@ export component RegionWindow inherits Window {
     Rectangle {
         x: 18px;
         y: 18px;
-        width: 330px;
-        height: 42px;
+        width: min(420px, root.width - 36px);
+        height: instruction.preferred-height + 24px;
         border-radius: 8px;
         background: #0b0f0ddd;
-        Text {
+        instruction := Text {
+            x: 12px;
+            y: 12px;
+            width: parent.width - 24px;
+            height: self.preferred-height;
             text: root.selection-instruction;
             color: Theme.text;
             font-size: 13px;
             horizontal-alignment: center;
             vertical-alignment: center;
+            wrap: word-wrap;
         }
     }
 

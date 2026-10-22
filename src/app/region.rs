@@ -849,7 +849,7 @@ fn start_region_recording(
     window.set_uploading(false);
     window.set_upload_progress(0.0);
     window.set_status_text("Recording region...".into());
-    window.set_status_detail("Press Record again or use its shortcut to stop".into());
+    window.set_status_detail("Press Stop or use the recording shortcut to finish".into());
     restore_window_if_needed(window, upload.restore_window);
     upload.cancellation.reset();
 

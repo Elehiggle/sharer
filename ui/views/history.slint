@@ -1,6 +1,5 @@
-import { ScrollView } from "std-widgets.slint";
 import { Icons, Theme } from "../theme.slint";
-import { FlatButton, IconButton, InlineNotice, PageHeading, PageSubtitle, SectionCard } from "../components.slint";
+import { AppScrollView, FlatButton, IconButton, InlineNotice, PageHeading, PageSubtitle, SectionCard } from "../components.slint";
 import { HistoryRow } from "../models.slint";
 
 component TableHeading inherits Text {
@@ -29,8 +28,7 @@ component SortableHeading inherits Rectangle {
     accessible-action-default => { root.activate(); }
 
     Text {
-        x: 5px;
-        width: parent.width - 10px;
+        width: parent.width;
         height: parent.height;
         text: root.label + (root.active-column == root.column ? (root.ascending ? "  ↑" : "  ↓") : "");
         color: root.active-column == root.column ? Theme.text : Theme.text-muted;
@@ -43,8 +41,9 @@ component SortableHeading inherits Rectangle {
     Tooltip { text: @markdown("Sort by \{root.label}. Click again to reverse the order."); }
 
     heading-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
 
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
@@ -314,6 +313,12 @@ export component HistoryView inherits Rectangle {
     callback show-settings();
 
     property <bool> narrow: root.width < 640px;
+    // Header and rows share the same column geometry, including the scroll gutter.
+    property <length> table-content-width: max(0px, root.width - 24px);
+    property <length> flexible-columns-width: max(0px, root.table-content-width - 26px - 108px - (root.narrow ? 20px : 40px));
+    property <length> file-column-width: root.flexible-columns-width * (root.narrow ? 0.6 : 0.38);
+    property <length> date-column-width: root.flexible-columns-width * 0.24;
+    property <length> size-column-width: root.flexible-columns-width * 0.12;
 
     VerticalLayout {
         spacing: 14px;
@@ -352,7 +357,7 @@ export component HistoryView inherits Rectangle {
 
                     HorizontalLayout {
                         padding-left: 14px;
-                        padding-right: 12px;
+                        padding-right: 36px;
                         spacing: 6px;
 
                         TableHeading { width: 34px; text: "Sort:"; }
@@ -369,13 +374,13 @@ export component HistoryView inherits Rectangle {
 
                     HorizontalLayout {
                         padding-left: 14px;
-                        padding-right: 12px;
+                        padding-right: 36px;
                         spacing: 10px;
 
-                        if root.narrow: TableHeading { width: 46%; text: "File"; }
-                        if !root.narrow: SortableHeading { width: 34%; label: "File"; column: 0; active-column: root.sort-column; ascending: root.sort-ascending; clicked(column) => { root.sort-column-clicked(column); } }
-                        if !root.narrow: SortableHeading { width: 18%; label: "Date"; column: 1; active-column: root.sort-column; ascending: root.sort-ascending; clicked(column) => { root.sort-column-clicked(column); } }
-                        if !root.narrow: SortableHeading { width: 10%; label: "Size"; column: 2; active-column: root.sort-column; ascending: root.sort-ascending; clicked(column) => { root.sort-column-clicked(column); } }
+                        if root.narrow: TableHeading { width: root.file-column-width; text: "File"; }
+                        if !root.narrow: SortableHeading { width: root.file-column-width; label: "File"; column: 0; active-column: root.sort-column; ascending: root.sort-ascending; clicked(column) => { root.sort-column-clicked(column); } }
+                        if !root.narrow: SortableHeading { width: root.date-column-width; label: "Date"; column: 1; active-column: root.sort-column; ascending: root.sort-ascending; clicked(column) => { root.sort-column-clicked(column); } }
+                        if !root.narrow: SortableHeading { width: root.size-column-width; label: "Size"; column: 2; active-column: root.sort-column; ascending: root.sort-ascending; clicked(column) => { root.sort-column-clicked(column); } }
                         if root.narrow: TableHeading { horizontal-stretch: 1; text: "Expires"; }
                         if !root.narrow: SortableHeading { horizontal-stretch: 1; label: "Expires"; column: 3; active-column: root.sort-column; ascending: root.sort-ascending; clicked(column) => { root.sort-column-clicked(column); } }
                         TableHeading { width: 108px; text: "Actions"; horizontal-alignment: center; }
@@ -397,7 +402,7 @@ export component HistoryView inherits Rectangle {
                     }
                 }
 
-                if root.rows.length > 0: ScrollView {
+                if root.rows.length > 0: AppScrollView {
                     vertical-stretch: 1;
                     min-height: 0px;
 
@@ -405,7 +410,7 @@ export component HistoryView inherits Rectangle {
                         spacing: 0px;
 
                         for row[index] in root.rows: Rectangle {
-                            height: root.narrow ? 62px : 56px;
+                            height: max(root.narrow ? 78px : 56px, expiry-cell.preferred-height + 16px);
                             border-width: 0px;
                             background: Math.mod(index, 2) == 1 ? #ffffff05 : transparent;
 
@@ -426,7 +431,7 @@ export component HistoryView inherits Rectangle {
                                 cross-axis-alignment: center;
 
                                 VerticalLayout {
-                                    width: root.narrow ? 46% : 34%;
+                                    width: root.file-column-width;
                                     alignment: center;
                                     spacing: 2px;
 
@@ -448,15 +453,21 @@ export component HistoryView inherits Rectangle {
                                         Tooltip { text: @markdown("\{parent.text}"); }
                                     }
                                     if root.narrow: Text {
-                                        text: row.created + "  ·  " + row.size;
+                                        text: row.created;
+                                        color: Theme.text-muted;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
+                                    if root.narrow: Text {
+                                        text: row.size;
                                         color: Theme.text-muted;
                                         font-size: 11px;
                                         overflow: elide;
                                     }
                                 }
-                                if !root.narrow: TableCell { width: 18%; text: row.created; }
-                                if !root.narrow: TableCell { width: 10%; text: row.size; }
-                                TableCell { horizontal-stretch: 1; text: row.expires; }
+                                if !root.narrow: TableCell { width: root.date-column-width; text: row.created; }
+                                if !root.narrow: TableCell { width: root.size-column-width; text: row.size; }
+                                expiry-cell := TableCell { horizontal-stretch: 1; height: self.preferred-height; text: row.expires; wrap: word-wrap; }
                                 actions := HistoryActions {
                                     action-token: row.action-token;
                                     file-name: row.filename;

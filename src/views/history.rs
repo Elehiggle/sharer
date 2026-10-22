@@ -118,7 +118,7 @@ fn wire_sort_callback(
         if let Some(window) = window_weak.upgrade()
             && let Err(error) = refresh_with_sort(&window, &storage, &controller, 0, sort)
         {
-            window.set_status_detail(format!("Could not sort history: {error:#}").into());
+            set_action_status(&window, format!("Could not sort history: {error:#}"), true);
         }
     });
 }
@@ -153,7 +153,7 @@ fn wire_link_callbacks(window: &AppWindow, controller: &Rc<RefCell<HistoryContro
         if let Err(error) = open::that(row.link.as_str())
             && let Some(window) = window_weak.upgrade()
         {
-            window.set_status_detail(format!("Could not open link: {error}").into());
+            set_action_status(&window, format!("Could not open link: {error}"), true);
         }
     });
 
@@ -193,10 +193,11 @@ fn wire_link_callbacks(window: &AppWindow, controller: &Rc<RefCell<HistoryContro
             return;
         }
 
-        let detail = deletion_page_status(&open::that(row.delete_link.as_str()));
+        let result = open::that(row.delete_link.as_str());
+        let detail = deletion_page_status(&result);
 
         if let Some(window) = window_weak.upgrade() {
-            window.set_status_detail(detail.into());
+            set_action_status(&window, detail, result.is_err());
         }
     });
 }
@@ -346,14 +347,15 @@ fn wire_removal_callbacks(
                 clear_persisted: |id| storage_for_delete_local.clear_history_local_path(id),
             },
         ) {
-            Ok(None) => window.set_status_detail("Local capture deleted".into()),
+            Ok(None) => set_action_status(&window, "Local capture deleted", false),
 
-            Ok(Some(error)) => window.set_status_detail(
+            Ok(Some(error)) => set_action_status(
+                &window,
                 format!(
                     "Local capture deleted, but its history record could not be updated. \
                      ShareR will reconcile it when this page reloads: {error:#}"
-                )
-                .into(),
+                ),
+                true,
             ),
 
             Err(error) => set_action_result(&window, Err(error)),
@@ -381,7 +383,7 @@ fn wire_pagination_callbacks(
                 page,
             )
         {
-            window.set_status_detail(format!("Could not load history: {error:#}").into());
+            set_action_status(&window, format!("Could not load history: {error:#}"), true);
         }
     });
 
@@ -395,7 +397,7 @@ fn wire_pagination_callbacks(
         if let Some(window) = window_weak.upgrade()
             && let Err(error) = refresh(&window, &storage_for_next, &controller_for_next, page)
         {
-            window.set_status_detail(format!("Could not load history: {error:#}").into());
+            set_action_status(&window, format!("Could not load history: {error:#}"), true);
         }
     });
 }
@@ -637,12 +639,12 @@ fn copy_row_value(
     let result = sharer::clipboard::copy_link(value.as_str());
 
     if let Some(window) = window.upgrade() {
-        let detail = match result {
-            Ok(()) => SharedString::from(format!("{description} copied to clipboard")),
-            Err(error) => SharedString::from(format!("Could not copy {description}: {error:#}")),
+        let detail = match &result {
+            Ok(()) => format!("{description} copied to clipboard"),
+            Err(error) => format!("Could not copy {description}: {error:#}"),
         };
 
-        window.set_status_detail(detail);
+        set_action_status(&window, detail, result.is_err());
     }
 }
 
@@ -715,9 +717,14 @@ fn history_id(row: &HistoryRow) -> Result<i64> {
 
 fn set_action_result(window: &AppWindow, result: Result<String>) {
     match result {
-        Ok(detail) => window.set_status_detail(detail.into()),
-        Err(error) => window.set_status_detail(format!("History action failed: {error:#}").into()),
+        Ok(detail) => set_action_status(window, detail, false),
+        Err(error) => set_action_status(window, format!("{error:#}"), true),
     }
+}
+
+pub(crate) fn set_action_status(window: &AppWindow, detail: impl Into<SharedString>, failed: bool) {
+    window.set_history_action_detail(detail.into());
+    window.set_history_action_failed(failed);
 }
 
 fn confirm(title: &str, description: &str) -> bool {

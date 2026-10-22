@@ -476,14 +476,9 @@ fn history_upload_gates_reject_busy_unsaved_setup_stale_and_missing_sources() {
     settings::initialize(&window, &saved);
     let history = initialize_test_history(&window, &storage);
     let (sender, receiver) = std::sync::mpsc::channel();
+    let cancellation = Arc::new(UploadCancellation::default());
 
-    super::wire_history_upload_callback(
-        &window,
-        &sender,
-        &storage,
-        &history,
-        &Arc::new(UploadCancellation::default()),
-    );
+    super::wire_history_upload_callback(&window, &sender, &storage, &history, &cancellation);
     let token = window.get_history_rows().row_data(0).unwrap().action_token;
 
     for gate in ["busy", "settings", "setup"] {
@@ -516,7 +511,9 @@ fn history_upload_gates_reject_busy_unsaved_setup_stale_and_missing_sources() {
     std::fs::remove_file(&original.local_path).unwrap();
     window.invoke_upload_history_local(token.clone());
     assert!(receiver.try_recv().is_err(), "missing file must not upload");
-    assert!(window.get_status_detail().contains("no longer exists"));
+    let failure = window.get_history_action_detail();
+
+    assert!(window.get_history_action_failed() && failure.contains("no longer exists"));
     assert_eq!(
         storage.history_entry(original.id).unwrap().as_ref(),
         Some(&original)
@@ -735,6 +732,156 @@ fn close_decision_keeps_only_tray_or_busy_windows_alive() {
 }
 
 #[test]
+fn closing_to_tray_preserves_settings_and_setup_drafts() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+
+    for (dirty, setup) in [(true, false), (false, true), (false, false)] {
+        let window = AppWindow::new().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Rc::new(PlatformStorage::open_in(directory.path()).unwrap());
+        let config = Rc::new(RefCell::new(sharer::config::AppConfig::default()));
+        let local_deleted: crate::views::history::LocalDeletionObserver = Rc::new(|_, _, _| {});
+        let history_removed: crate::views::history::HistoryRemovalObserver = Rc::new(|_, _| {});
+        let history = crate::views::history::initialize(
+            &window,
+            &storage,
+            false,
+            &local_deleted,
+            &history_removed,
+        )
+        .unwrap();
+        let close_requested = Rc::new(Cell::new(false));
+
+        window.set_tray_available(true);
+        window.set_settings_dirty(dirty);
+        window.set_show_onboarding(setup);
+        window.set_uploader_url("https://unsaved.example/upload".into());
+        window.set_wizard_provider(3);
+        super::wire_close_callback(&window, &history, &close_requested, &config);
+        window.show().unwrap();
+
+        let ui = Rc::new(RefCell::new(Some(super::UiSession {
+            close_requested,
+            history,
+            transient: false,
+            window: window.clone_strong(),
+        })));
+
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        super::release_requested_ui(&ui);
+
+        assert!(!window.window().is_visible());
+        assert_eq!(ui.borrow().is_some(), dirty || setup);
+
+        if dirty || setup {
+            let reopened = super::current_window(&ui).unwrap();
+
+            super::show_ui(&ui, &reopened).unwrap();
+            assert!(reopened.window().is_visible());
+            assert_eq!(reopened.get_settings_dirty(), dirty);
+            assert_eq!(reopened.get_show_onboarding(), setup);
+            assert_eq!(
+                reopened.get_uploader_url(),
+                "https://unsaved.example/upload"
+            );
+            assert_eq!(reopened.get_wizard_provider(), 3);
+            reopened.hide().unwrap();
+        }
+    }
+}
+
+#[test]
+fn cancelled_quit_returns_to_settings_without_discarding_the_draft() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+
+    window.set_uploader_url("https://unsaved.example/upload".into());
+    window.set_settings_dirty(true);
+    window.set_current_page(0);
+
+    assert!(!super::may_quit_with_draft(&window, || false));
+    assert!(window.window().is_visible());
+    assert_eq!(window.get_current_page(), 2);
+    assert!(window.get_settings_dirty());
+    assert_eq!(window.get_uploader_url(), "https://unsaved.example/upload");
+    assert!(super::may_quit_with_draft(&window, || true));
+
+    window.set_settings_dirty(false);
+    assert!(super::may_quit_with_draft(&window, || {
+        panic!("saved settings must not trigger a discard prompt")
+    }));
+    window.hide().unwrap();
+}
+
+#[test]
+fn history_action_feedback_preserves_capture_and_upload_status() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+
+    for (status, detail, uploading) in [
+        ("Capture failed", "No screen could be captured", false),
+        ("Uploaded", "Link copied to clipboard", false),
+        ("Uploading...", "Waiting for the server response", true),
+    ] {
+        window.set_status_text(status.into());
+        window.set_status_detail(detail.into());
+        window.set_busy(uploading);
+        window.set_uploading(uploading);
+
+        crate::views::history::set_action_status(&window, "Local capture no longer exists", true);
+        assert_eq!(window.get_status_text(), status);
+        assert_eq!(window.get_status_detail(), detail);
+        assert_eq!(
+            window.get_history_action_detail(),
+            "Local capture no longer exists"
+        );
+        assert!(window.get_history_action_failed());
+
+        crate::views::history::set_action_status(&window, "Public link copied to clipboard", false);
+        assert_eq!(window.get_status_text(), status);
+        assert_eq!(window.get_status_detail(), detail);
+        assert_eq!(
+            window.get_history_action_detail(),
+            "Public link copied to clipboard"
+        );
+        assert!(!window.get_history_action_failed());
+    }
+}
+
+#[test]
+fn new_upload_clears_previous_history_feedback() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    window.set_uploader_kind(UploaderKind::Uguu.index());
+    window.set_current_page(1);
+    crate::views::history::set_action_status(&window, "Local capture no longer exists", true);
+
+    super::queue_job(
+        &window,
+        &sender,
+        super::JobSource::Clipboard,
+        Arc::new(UploadCancellation::default()),
+    );
+
+    assert!(receiver.try_recv().is_ok());
+    assert!(window.get_busy());
+    assert!(window.get_history_action_detail().is_empty());
+    assert!(!window.get_history_action_failed());
+
+    // Completing the job cannot reveal feedback from the previous history action.
+    window.set_status_text("Uploaded".into());
+    window.set_status_detail("Link copied to clipboard".into());
+    window.set_uploading(false);
+    window.set_busy(false);
+    assert!(window.get_history_action_detail().is_empty());
+    assert_eq!(window.get_status_text(), "Uploaded");
+}
+
+#[test]
 fn quit_during_upload_waits_for_worker_cleanup_and_only_cancels_once() {
     assert_eq!(
         quit_decision(QuitState {
@@ -849,6 +996,15 @@ fn deleted_history_file_invalidates_persisted_latest_activity_by_id_or_path() {
         std::path::Path::new("C:/elsewhere/capture.png")
     ));
     assert_eq!(activity.borrow().as_ref().unwrap().local_path, "");
+    assert!(
+        activity
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .detail
+            .contains("Local file no longer available")
+    );
+    assert_eq!(activity.borrow().as_ref().unwrap().status, "Saved locally");
 
     activity.borrow_mut().as_mut().unwrap().local_path = path.to_string_lossy().into_owned();
     assert!(invalidate_activity_local_path(&activity, 7, path));

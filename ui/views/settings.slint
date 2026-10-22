@@ -1,10 +1,9 @@
-import { ScrollView } from "std-widgets.slint";
 import { Icons, Theme } from "../theme.slint";
-import { Badge, CompactField, CompactSelect, FlatButton, InlineNotice, NumberStepper, PageHeading, PageSubtitle, SectionHeading, SelectableButton, SettingGroup, SettingRow, SettingsCard, ToggleRow } from "../components.slint";
+import { AppScrollView, Badge, CompactField, CompactSelect, FlatButton, InlineNotice, NumberStepper, PageHeading, PageSubtitle, SectionHeading, SelectableButton, SettingGroup, SettingRow, SettingsCard, ToggleRow } from "../components.slint";
+import { ProviderPicker } from "../provider-picker.slint";
 
-component SettingsPane inherits ScrollView {
+component SettingsPane inherits AppScrollView {
     VerticalLayout {
-        padding-right: 8px;
         padding-bottom: 24px;
         spacing: 14px;
         alignment: start;
@@ -24,8 +23,10 @@ component TabButton inherits Rectangle {
     border-color: Theme.primary-bright;
     border-radius: Theme.control-radius;
     forward-focus: tab-focus;
-    accessible-role: button;
+    accessible-role: tab;
     accessible-label: root.text;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
     accessible-action-default => { root.clicked(); }
 
     HorizontalLayout {
@@ -49,8 +50,9 @@ component TabButton inherits Rectangle {
     }
 
     tab-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
 
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
@@ -103,8 +105,9 @@ component ShortcutField inherits Rectangle {
     }
 
     shortcut-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
         enabled: root.enabled;
 
         key-pressed(event) => {
@@ -133,6 +136,9 @@ component ShortcutCell inherits VerticalLayout {
     in property <bool> enabled: true;
     callback record();
 
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
     spacing: 5px;
 
     Text {
@@ -478,6 +484,8 @@ export component SettingsView inherits Rectangle {
                                     spacing: 24px;
 
                                     VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
                                         horizontal-stretch: 1;
                                         spacing: 5px;
                                         Text { text: "Length"; color: Theme.text-muted; font-size: 12px; }
@@ -496,6 +504,8 @@ export component SettingsView inherits Rectangle {
                                         }
                                     }
                                     VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
                                         horizontal-stretch: 1;
                                         spacing: 5px;
                                         Text { text: "Frame rate"; color: Theme.text-muted; font-size: 12px; }
@@ -640,41 +650,35 @@ export component SettingsView inherits Rectangle {
 
                 if root.selected-section == 2: SettingsPane {
                     VerticalLayout {
-                        spacing: 6px;
+                        spacing: 12px;
 
                         SectionHeading { text: "Destination"; }
-                        SettingsCard {
-                            SettingGroup {
-                                label: "Upload provider";
-                                description: "Where new uploads go. Links are public.";
-                                help: "Uguu, Catbox and Litterbox need no account. Imgur, Pixeldrain and s-ul need a client ID or API key. Custom sends files to your own server.";
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    cross-axis-alignment: center;
-
-                                    CompactSelect {
-                                        control-enabled: !root.busy;
-                                        width: 220px;
-                                        label: "Upload provider";
-                                        placeholder-text: "Choose a new provider";
-                                        model: root.provider-names;
-                                        current-index <=> root.uploader-kind;
-                                    }
-                                    Badge {
-                                        text: root.uploader-kind >= 7 ? "Unavailable" : (root.configured ? "Configured" : "Needs setup");
-                                        tone: root.configured ? 2 : 3;
-                                    }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                                }
-                                if root.uploader-kind != 0: Text {
-                                    text: (root.uploader-kind >= 7 ? root.uploader-name + ": " : "") + root.provider-limits[root.uploader-kind];
-                                    color: root.uploader-kind >= 7 ? Theme.accent : Theme.text-muted;
-                                    font-size: 12.5px;
-                                    wrap: word-wrap;
-                                }
+                        Text {
+                            text: "Choose where uploads go. Automatic uploads are controlled in Capture.";
+                            color: Theme.text-muted;
+                            font-size: 12.5px;
+                            wrap: word-wrap;
+                        }
+                        ProviderPicker {
+                            compact: root.narrow;
+                            selected-provider <=> root.uploader-kind;
+                            provider-limits: root.provider-limits;
+                            enabled: !root.busy;
+                            show-local: false;
+                            chosen(index) => { root.uploader-kind = index; }
+                        }
+                        if root.uploader-kind == 0 || (root.uploader-kind >= 4 && root.uploader-kind <= 6): HorizontalLayout {
+                            spacing: 10px;
+                            cross-axis-alignment: center;
+                            SectionHeading { text: root.uploader-kind == 0 ? "Custom server settings" : root.provider-names[root.uploader-kind] + " connection"; }
+                            Badge {
+                                text: root.configured ? "Configured" : "Needs setup";
+                                tone: root.configured ? 2 : 3;
                             }
-                            if root.uploader-kind == 4: Rectangle { height: 1px; background: Theme.border; }
-                            if root.uploader-kind == 4: SettingRow {
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        if root.uploader-kind == 0 || (root.uploader-kind >= 4 && root.uploader-kind <= 6): SettingsCard {
+                            if root.uploader-kind == 4: SettingGroup {
                                 label: "Imgur client ID";
                                 description: "Free from your Imgur application settings.";
                                 CompactField {
@@ -685,8 +689,7 @@ export component SettingsView inherits Rectangle {
                                     label: "Imgur client ID";
                                 }
                             }
-                            if root.uploader-kind == 5: Rectangle { height: 1px; background: Theme.border; }
-                            if root.uploader-kind == 5: SettingRow {
+                            if root.uploader-kind == 5: SettingGroup {
                                 label: "Pixeldrain API key";
                                 description: "From your Pixeldrain account settings.";
                                 CompactField {
@@ -697,8 +700,7 @@ export component SettingsView inherits Rectangle {
                                     label: "Pixeldrain API key";
                                 }
                             }
-                            if root.uploader-kind == 6: Rectangle { height: 1px; background: Theme.border; }
-                            if root.uploader-kind == 6: SettingRow {
+                            if root.uploader-kind == 6: SettingGroup {
                                 label: "s-ul API key";
                                 description: "Required by s-ul.";
                                 CompactField {
@@ -709,8 +711,7 @@ export component SettingsView inherits Rectangle {
                                     label: "s-ul API key";
                                 }
                             }
-                            if root.uploader-kind == 0: Rectangle { height: 1px; background: Theme.border; }
-                            if root.uploader-kind == 0: SettingRow {
+                            if root.uploader-kind == 0: SettingGroup {
                                 label: "Endpoint";
                                 description: "Your server returns ShareR JSON.";
                                 help: "The endpoint receives a multipart upload in the file field and returns the link, deletion link and expiry. HTTPS is strongly recommended.";
@@ -729,22 +730,34 @@ export component SettingsView inherits Rectangle {
                                 HorizontalLayout {
                                     spacing: 8px;
 
-                                    CompactField {
-                                        field-enabled: !root.busy;
+                                    VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
                                         horizontal-stretch: 1;
-                                        text <=> root.upload-header-name;
-                                        placeholder-text: "Header name";
-                                        label: "Request header name";
-                                        edited => { root.custom-header-edited(); }
+                                        spacing: 5px;
+                                        Text { text: "Header name"; color: Theme.text-soft; font-size: 12px; }
+                                        CompactField {
+                                            field-enabled: !root.busy;
+                                            text <=> root.upload-header-name;
+                                            placeholder-text: "Authorization";
+                                            label: "Request header name";
+                                            edited => { root.custom-header-edited(); }
+                                        }
                                     }
-                                    CompactField {
-                                        field-enabled: !root.busy;
+                                    VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
                                         horizontal-stretch: 1;
-                                        text <=> root.upload-header-value;
-                                        placeholder-text: "Header value";
-                                        input-type: InputType.password;
-                                        label: "Request header value";
-                                        edited => { root.custom-header-edited(); }
+                                        spacing: 5px;
+                                        Text { text: "Header value"; color: Theme.text-soft; font-size: 12px; }
+                                        CompactField {
+                                            field-enabled: !root.busy;
+                                            text <=> root.upload-header-value;
+                                            placeholder-text: "Optional credential";
+                                            input-type: InputType.password;
+                                            label: "Request header value";
+                                            edited => { root.custom-header-edited(); }
+                                        }
                                     }
                                 }
                             }

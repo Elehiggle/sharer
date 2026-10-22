@@ -116,7 +116,7 @@ These are tested boundaries, not aspirations:
 | SQLite page cache                           | 512 KiB target                                     |
 | Render upload history                       | 25 entries per page                                |
 
-Closing to the tray drops the Slint component and rendered history model. Allocator and operating-system working-set pages may remain resident after those objects are freed.
+Closing to the tray drops the Slint component and rendered history model when no settings draft or setup session is open. Unsaved settings and setup stay in a hidden UI session so reopening preserves the user's work. Actually quitting with unsaved settings asks whether to discard them; cancelling returns to Settings. Allocator and operating-system working-set pages may remain resident after UI objects are freed.
 
 Animated recording encodes one bounded frame at a time into a temporary file. RGBA input is limited to 32 MiB per frame. Encoded output is configurable from 1 to 3 GiB, below WebP's 32-bit container-size limit; this does not promise a fixed process RSS ceiling.
 
@@ -169,6 +169,8 @@ prettier --check "**/*.md"
 Keep LF line endings in Rust and shell files, as specified by `.gitattributes`. CRLF can produce false unused-dependency warnings in Rulewright and break shell scripts.
 
 For UI changes, regenerate the screenshots and inspect every affected view at the default and minimum supported window sizes.
+
+Use separate acceptance gates for layout, interaction, and state handling. Layout review must inspect actual renders at 100%, 150%, and 200%, including intermediate scroll positions: labels must fit, related controls must align, and scrollbars must have clear space beside content. Interaction review must exercise mouse and keyboard focus, popup selection, cancellation, and reopening. State review must verify saved settings and files after success, failure, and cancellation. Ask a reviewer who did not implement the view to judge the screenshots; a successful build or screenshot command does not pass the visual gate. Record the tested binary, fixtures, and any platform-specific gaps before publishing the gallery.
 
 Windows CI runs the complete headless and desktop test suites, including redirected CLI output, per-user startup registration in a disposable non-startup registry subtree, and single-instance coordination. For native UI checks, use an isolated `SHARER_CONFIG_DIR` and a local test uploader; do not change the user's login registration or upload their captures.
 

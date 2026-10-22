@@ -1,0 +1,94 @@
+import { ChoiceCard, SelectableButton } from "components.slint";
+import { Theme } from "theme.slint";
+
+export component ProviderPicker inherits VerticalLayout {
+    in-out property <int> selected-provider: 1;
+    in property <[string]> provider-limits;
+    in property <bool> enabled: true;
+    in property <bool> show-local: false;
+    in property <bool> compact: false;
+    callback chosen(int);
+
+    spacing: 14px;
+    forward-focus: primary-choice;
+
+    public function focus-first() { primary-choice.focus(); }
+    function choose(index: int) {
+        root.selected-provider = index;
+        root.chosen(index);
+    }
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        primary-choice := ChoiceCard {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            preferred-width: 0px;
+            enabled: root.enabled;
+            title: root.show-local ? "Local only" : "Custom server";
+            subtitle: root.show-local ? "Save captures on this PC." : "Use your own upload endpoint.";
+            selected: root.selected-provider == (root.show-local ? -1 : 0);
+            clicked => { root.choose(root.show-local ? -1 : 0); }
+        }
+        if root.show-local: ChoiceCard {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            preferred-width: 0px;
+            enabled: root.enabled;
+            title: "Custom server";
+            subtitle: "Use your own upload endpoint.";
+            selected: root.selected-provider == 0;
+            clicked => { root.choose(0); }
+        }
+    }
+
+    VerticalLayout {
+        spacing: 8px;
+        Text { text: "No account needed"; color: Theme.text-soft; font-size: 13px; font-weight: 600; }
+
+        if !root.compact: HorizontalLayout {
+            spacing: 10px;
+            for provider[index] in ["Uguu", "Catbox", "Litterbox"]: ChoiceCard {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                preferred-width: 0px;
+                height: 96px;
+                enabled: root.enabled;
+                title: provider;
+                subtitle: root.provider-limits[index + 1];
+                selected: root.selected-provider == index + 1;
+                clicked => { root.choose(index + 1); }
+            }
+        }
+        if root.compact: VerticalLayout {
+            spacing: 8px;
+            for provider[index] in ["Uguu", "Catbox", "Litterbox"]: ChoiceCard {
+                enabled: root.enabled;
+                title: provider;
+                subtitle: root.provider-limits[index + 1];
+                selected: root.selected-provider == index + 1;
+                clicked => { root.choose(index + 1); }
+            }
+        }
+    }
+
+    VerticalLayout {
+        spacing: 8px;
+        Text { text: "Account or API key"; color: Theme.text-muted; font-size: 12.5px; }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            cross-axis-alignment: center;
+            SelectableButton { text: "Imgur"; min-width: 80px; enabled: root.enabled; selected: root.selected-provider == 4; clicked => { root.choose(4); } }
+            SelectableButton { text: "Pixeldrain"; min-width: 100px; enabled: root.enabled; selected: root.selected-provider == 5; clicked => { root.choose(5); } }
+            SelectableButton { text: "s-ul"; min-width: 72px; enabled: root.enabled; selected: root.selected-provider == 6; clicked => { root.choose(6); } }
+        }
+        if root.selected-provider >= 4: Text {
+            text: root.provider-limits[root.selected-provider];
+            color: root.selected-provider >= 7 ? Theme.accent : Theme.text-muted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+}

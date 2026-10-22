@@ -851,7 +851,7 @@ fn wire_callbacks(
             return;
         }
 
-        if let Some(path) = rfd::FileDialog::new().pick_file() {
+        if let Some(path) = pick_upload_file() {
             queue_job(
                 &window,
                 &sender,
@@ -1091,15 +1091,24 @@ fn wire_close_callback(
             }
 
             CloseAction::HideToTray => {
-                views::history::suspend(history.as_ref());
+                let preserve_draft = window.get_settings_dirty() || window.get_show_onboarding();
+
+                if !preserve_draft {
+                    views::history::suspend(history.as_ref());
+                }
+
                 let _ = window.hide();
 
-                close_requested.set(true);
+                close_requested.set(!preserve_draft);
 
                 slint::CloseRequestResponse::KeepWindowShown
             }
 
             CloseAction::Quit => {
+                if !may_quit_with_draft(&window, confirm_discard_settings) {
+                    return slint::CloseRequestResponse::KeepWindowShown;
+                }
+
                 let _ = slint::quit_event_loop();
 
                 slint::CloseRequestResponse::HideWindow
@@ -1256,7 +1265,7 @@ fn wire_history_upload_callback(
             }
 
             Err(error) => {
-                window.set_status_detail(format!("History action failed: {error:#}").into());
+                views::history::set_action_status(&window, format!("{error:#}"), true);
             }
         }
     });
@@ -1387,6 +1396,8 @@ fn queue_capture_job(
 }
 
 fn clear_last_receipt(window: &AppWindow) {
+    window.set_history_action_detail("".into());
+    window.set_history_action_failed(false);
     window.set_last_link("".into());
     window.set_last_local_path("".into());
     window.set_last_delete_url("".into());
@@ -1613,7 +1624,7 @@ fn handle_action(action: TrayAction, state: &PollingState, resources: &CallbackR
         ),
 
         TrayAction::ChooseFile => {
-            if let Some(path) = rfd::FileDialog::new().pick_file() {
+            if let Some(path) = pick_upload_file() {
                 queue_job(
                     &window,
                     &state.job_tx,
@@ -1651,6 +1662,12 @@ fn handle_quit(ui: &UiSlot, upload_cancellation: &UploadCancellation, quit_after
 
     match decision {
         QuitDecision::ExitNow => {
+            if let Some(window) = window.as_ref()
+                && !may_quit_with_draft(window, confirm_discard_settings)
+            {
+                return;
+            }
+
             let _ = slint::quit_event_loop();
         }
 
@@ -1680,6 +1697,40 @@ fn handle_quit(ui: &UiSlot, upload_cancellation: &UploadCancellation, quit_after
             }
         }
     }
+}
+
+fn pick_upload_file() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose a file to upload")
+        .pick_file()
+}
+
+fn may_quit_with_draft(window: &AppWindow, confirm_discard: impl FnOnce() -> bool) -> bool {
+    if !window.get_settings_dirty() || confirm_discard() {
+        return true;
+    }
+
+    window.set_current_page(2);
+    let _ = window.show();
+
+    foreground_ui(window);
+    false
+}
+
+fn confirm_discard_settings() -> bool {
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Discard unsaved settings and quit?")
+        .set_description("Your changes have not been saved. Cancel to return to Settings, or discard the changes and quit ShareR.")
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+            "Discard and quit".to_owned(),
+            "Cancel".to_owned(),
+        ))
+        .show();
+
+    // Windows without common-controls-v6 uses native OK/Cancel labels and results.
+    result == rfd::MessageDialogResult::Ok
+        || result == rfd::MessageDialogResult::Custom("Discard and quit".to_owned())
 }
 
 const fn quit_decision(state: QuitState) -> QuitDecision {

@@ -1,6 +1,5 @@
-import { ScrollView } from "std-widgets.slint";
 import { Icons, Theme } from "../theme.slint";
-import { Badge, FlatButton, IconBox, InlineNotice, PageHeading, PageSubtitle, SectionCard, SectionHeading } from "../components.slint";
+import { AppScrollView, Badge, FlatButton, IconBox, InlineNotice, PageHeading, PageSubtitle, SectionCard, SectionHeading } from "../components.slint";
 
 component QuickAction inherits Rectangle {
     in property <string> title;
@@ -17,7 +16,7 @@ component QuickAction inherits Rectangle {
     vertical-stretch: 0;
     border-radius: 9px;
     border-width: 1px;
-    border-color: root.active || (root.hovered && root.enabled) ? (root.destructive ? Theme.accent : Theme.primary) : Theme.border;
+    border-color: action-focus.has-focus || root.active || (root.hovered && root.enabled) ? (root.destructive ? Theme.accent : Theme.primary) : Theme.border;
     background: root.hovered && root.enabled ? Theme.surface-hover : Theme.surface;
     forward-focus: action-focus;
     accessible-role: button;
@@ -26,14 +25,14 @@ component QuickAction inherits Rectangle {
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 
     VerticalLayout {
-        padding-left: 13px;
+        padding-left: 10px;
         padding-right: 10px;
         padding-top: 11px;
         padding-bottom: 10px;
         spacing: 7px;
 
         HorizontalLayout {
-            spacing: 9px;
+            spacing: 5px;
 
             IconBox {
                 icon-source: root.icon-source;
@@ -45,7 +44,7 @@ component QuickAction inherits Rectangle {
                 horizontal-stretch: 1;
                 text: root.title;
                 color: root.enabled ? Theme.text : Theme.text-muted;
-                font-size: 14px;
+                font-size: root.width < 140px ? 13px : 14px;
                 font-weight: 600;
                 vertical-alignment: center;
                 overflow: elide;
@@ -53,15 +52,18 @@ component QuickAction inherits Rectangle {
         }
         Text {
             text: root.subtitle;
-            color: root.enabled ? Theme.text-muted : Theme.text-muted;
+            color: Theme.text-muted;
             font-size: 11.5px;
+            height: self.preferred-height;
+            wrap: word-wrap;
             overflow: elide;
         }
     }
 
     action-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
         enabled: root.enabled;
 
         key-pressed(event) => {
@@ -132,6 +134,7 @@ export component CaptureView inherits Rectangle {
     in property <bool> recording;
     in property <bool> configured;
     in property <bool> auto-upload;
+    in property <bool> settings-dirty;
     in property <string> uploader-name;
     in property <bool> capture-enabled;
     in property <string> region-hotkey;
@@ -163,6 +166,7 @@ export component CaptureView inherits Rectangle {
     callback open-delete();
     callback open-update();
     callback show-settings();
+    callback review-settings();
     callback show-capture-settings();
     callback show-general-settings();
 
@@ -177,40 +181,57 @@ export component CaptureView inherits Rectangle {
             || root.status-text == "Capture failed"
             || root.status-text == "Save failed"
             || root.status-text == "Settings invalid"
+            || root.status-text == "History action failed"
             || root.status-text == "Setup required"
             || root.status-text == "Settings not saved";
     property <bool> narrow: root.width < 680px;
 
-    ScrollView {
+    content := AppScrollView {
         VerticalLayout {
-            padding-right: 6px;
-            spacing: 14px;
+            spacing: 8px;
 
-        HorizontalLayout {
-            spacing: 12px;
-            cross-axis-alignment: center;
+            HorizontalLayout {
+                spacing: 12px;
+                cross-axis-alignment: center;
 
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: 2px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
 
-                PageHeading { text: "Capture & upload"; }
-                if !root.narrow: PageSubtitle { text: "Capture a region, record your screen, or upload a file."; }
-            }
-            Rectangle { vertical-stretch: 1; background: transparent; }
-            if root.auto-upload && root.configured: Badge {
-                text: "Auto-upload → " + root.uploader-name;
-                tone: 1;
-                clicked => { root.show-settings(); }
-            }
-            if !root.auto-upload || !root.configured: Badge {
-                text: root.auto-upload ? "Uploader not ready" : "Auto-upload off";
-                tone: 0;
-                clicked => {
-                    if root.auto-upload { root.show-settings(); }
-                    else { root.show-general-settings(); }
+                    PageHeading { text: "Capture & upload"; }
+                    if !root.narrow: PageSubtitle { text: "Capture a region, record your screen, or upload a file."; }
+                }
+                if !root.narrow: Badge {
+                    interactive: true;
+                    text: root.auto-upload ? (root.configured ? "Auto-upload → " + root.uploader-name : "Uploader not ready") : "Auto-upload off";
+                    tone: root.auto-upload && root.configured ? 1 : 0;
+                    clicked => {
+                        if root.auto-upload { root.show-settings(); }
+                        else { root.show-capture-settings(); }
+                    }
                 }
             }
+
+            if root.narrow: HorizontalLayout {
+                alignment: start;
+
+                Badge {
+                    interactive: true;
+                    text: root.auto-upload ? (root.configured ? "Auto-upload → " + root.uploader-name : "Uploader not ready") : "Auto-upload off";
+                    tone: root.auto-upload && root.configured ? 1 : 0;
+                    clicked => {
+                        if root.auto-upload { root.show-settings(); }
+                        else { root.show-capture-settings(); }
+                    }
+                }
+            }
+        }
+
+        if root.settings-dirty: InlineNotice {
+            text: "Unsaved settings";
+            detail: "Save or discard your changes before starting a capture or upload.";
+            action-text: "Review settings";
+            action => { root.review-settings(); }
         }
 
         if !root.configured: InlineNotice {
@@ -228,75 +249,83 @@ export component CaptureView inherits Rectangle {
             action => { root.open-update(); }
         }
 
-        SectionHeading { text: "Quick actions"; }
+        if !root.uploading: SectionHeading { text: "Quick actions"; }
 
-        if !root.narrow: HorizontalLayout {
+        if !root.narrow && !root.uploading: HorizontalLayout {
             spacing: 8px;
 
             QuickAction {
+                width: (content.content-width - 32px) / 5;
                 title: "Region";
                 subtitle: root.region-hotkey;
                 icon-source: Icons.crop;
-                enabled: !root.busy && root.capture-enabled;
+                enabled: !root.busy && !root.settings-dirty && root.capture-enabled;
                 clicked => { root.capture-region(); }
             }
             QuickAction {
+                width: (content.content-width - 32px) / 5;
                 title: root.recording ? "Stop" : "Record";
                 subtitle: root.recording ? (root.auto-upload && root.configured ? "Finish and upload" : "Finish and save") : root.recording-hotkey;
                 icon-source: Icons.recording;
                 destructive: root.recording;
-                enabled: (!root.busy || root.recording) && root.capture-enabled;
+                enabled: (!root.busy || root.recording) && (root.recording || !root.settings-dirty) && root.capture-enabled;
                 clicked => { root.record-region(); }
             }
             QuickAction {
+                width: (content.content-width - 32px) / 5;
                 title: "Screen";
                 subtitle: root.screen-hotkey;
                 icon-source: Icons.screen;
-                enabled: !root.busy && root.capture-enabled;
+                enabled: !root.busy && !root.settings-dirty && root.capture-enabled;
                 clicked => { root.capture-screen(); }
             }
             QuickAction {
+                width: (content.content-width - 32px) / 5;
                 title: "Clipboard";
                 subtitle: root.clipboard-hotkey;
                 icon-source: Icons.clipboard;
-                enabled: !root.busy && root.configured;
+                enabled: !root.busy && !root.settings-dirty && root.configured;
                 clicked => { root.upload-clipboard(); }
             }
             QuickAction {
+                width: (content.content-width - 32px) / 5;
                 title: "File";
-                subtitle: "Choose and upload";
+                subtitle: "Upload a file";
                 icon-source: Icons.file;
-                enabled: !root.busy && root.configured;
+                enabled: !root.busy && !root.settings-dirty && root.configured;
                 clicked => { root.choose-file(); }
             }
         }
 
-        if root.narrow: VerticalLayout {
+        if root.narrow && !root.uploading: VerticalLayout {
             spacing: 8px;
 
             HorizontalLayout {
                 spacing: 8px;
 
                 QuickAction {
+                    width: (content.content-width - 16px) / 3;
                     title: "Region";
                     subtitle: root.region-hotkey;
                     icon-source: Icons.crop;
-                    enabled: !root.busy && root.capture-enabled;
+                    enabled: !root.busy && !root.settings-dirty && root.capture-enabled;
                     clicked => { root.capture-region(); }
                 }
                 QuickAction {
+                    width: (content.content-width - 16px) / 3;
                     title: root.recording ? "Stop" : "Record";
                     subtitle: root.recording ? (root.auto-upload && root.configured ? "Finish and upload" : "Finish and save") : root.recording-hotkey;
                     icon-source: Icons.recording;
                     destructive: root.recording;
-                    enabled: (!root.busy || root.recording) && root.capture-enabled;
+                    enabled: (!root.busy || root.recording) && (root.recording || !root.settings-dirty) && root.capture-enabled;
                     clicked => { root.record-region(); }
                 }
                 QuickAction {
+                    width: (content.content-width - 16px) / 3;
                     title: "Screen";
                     subtitle: root.screen-hotkey;
                     icon-source: Icons.screen;
-                    enabled: !root.busy && root.capture-enabled;
+                    enabled: !root.busy && !root.settings-dirty && root.capture-enabled;
                     clicked => { root.capture-screen(); }
                 }
             }
@@ -304,20 +333,22 @@ export component CaptureView inherits Rectangle {
                 spacing: 8px;
 
                 QuickAction {
+                    width: (content.content-width - 16px) / 3;
                     title: "Clipboard";
                     subtitle: root.clipboard-hotkey;
                     icon-source: Icons.clipboard;
-                    enabled: !root.busy && root.configured;
+                    enabled: !root.busy && !root.settings-dirty && root.configured;
                     clicked => { root.upload-clipboard(); }
                 }
                 QuickAction {
+                    width: (content.content-width - 16px) / 3;
                     title: "File";
-                    subtitle: "Choose and upload";
+                    subtitle: "Upload a file";
                     icon-source: Icons.file;
-                    enabled: !root.busy && root.configured;
+                    enabled: !root.busy && !root.settings-dirty && root.configured;
                     clicked => { root.choose-file(); }
                 }
-                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Rectangle { width: (content.content-width - 16px) / 3; background: transparent; }
             }
         }
 
@@ -347,6 +378,7 @@ export component CaptureView inherits Rectangle {
                             color: Theme.text;
                             font-size: 15px;
                             font-weight: 600;
+                            wrap: word-wrap;
                         }
                         Text {
                             text: root.status-detail;
@@ -360,6 +392,7 @@ export component CaptureView inherits Rectangle {
 
                 if root.uploading: HorizontalLayout {
                     spacing: 10px;
+                    cross-axis-alignment: center;
 
                     Rectangle {
                         horizontal-stretch: 1;
@@ -472,7 +505,7 @@ export component CaptureView inherits Rectangle {
                 spacing: 10px;
 
                 Text {
-                    text: "Nothing captured yet";
+                    text: "Ready to capture";
                     color: Theme.text;
                     font-size: 15px;
                     font-weight: 600;
@@ -484,18 +517,25 @@ export component CaptureView inherits Rectangle {
                     wrap: word-wrap;
                 }
                 HorizontalLayout {
-                    spacing: 18px;
+                    spacing: 16px;
+                    alignment: start;
+                    cross-axis-alignment: center;
 
-                    Text { text: root.region-hotkey; color: Theme.primary-bright; font-size: 12.5px; font-weight: 600; }
-                    Text { text: "Region"; color: Theme.text-muted; font-size: 12.5px; }
-                    Rectangle { width: 1px; height: 14px; background: Theme.border; y: (parent.height - self.height) / 2; }
-                    Text { text: root.screen-hotkey; color: Theme.primary-bright; font-size: 12.5px; font-weight: 600; }
-                    Text { text: "Full screen"; color: Theme.text-muted; font-size: 12.5px; }
+                    HorizontalLayout {
+                        horizontal-stretch: 0;
+                        spacing: 6px;
+                        Text { text: root.region-hotkey; color: Theme.primary-bright; font-size: 12.5px; font-weight: 600; }
+                        Text { text: "Region"; color: Theme.text-muted; font-size: 12.5px; }
+                    }
+                    Rectangle { width: 1px; height: 14px; background: Theme.border; }
+                    HorizontalLayout {
+                        horizontal-stretch: 0;
+                        spacing: 6px;
+                        Text { text: root.screen-hotkey; color: Theme.primary-bright; font-size: 12.5px; font-weight: 600; }
+                        Text { text: "Full screen"; color: Theme.text-muted; font-size: 12.5px; }
+                    }
                 }
             }
-        }
-
-        Rectangle { vertical-stretch: 1; background: transparent; }
         }
     }
 }

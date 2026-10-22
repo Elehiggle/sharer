@@ -1,5 +1,22 @@
-import { LineEdit } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 import { Icons, Theme } from "theme.slint";
+
+// Fluent scrollbars overlay their viewport. Reserve space for the complete
+// 14px hit target plus breathing room, even while the narrow thumb is hidden.
+export component AppScrollView inherits ScrollView {
+    in property <length> content-spacing: 14px;
+    out property <length> content-width: root.visible-width - 24px;
+    viewport-width: root.visible-width;
+    horizontal-scrollbar-policy: always-off;
+
+    VerticalLayout {
+        padding-right: 24px;
+        padding-bottom: 8px;
+        spacing: root.content-spacing;
+        alignment: start;
+        @children
+    }
+}
 
 export component Icon inherits Image {
     in property <color> tint: Theme.text-soft;
@@ -82,6 +99,7 @@ export component SettingsCard inherits Rectangle {
 export component Badge inherits Rectangle {
     in property <string> text;
     in property <int> tone: 0;
+    in property <bool> interactive: false;
     callback clicked;
 
     property <color> badge-color: root.tone == 4 ? Theme.danger : (root.tone == 3 ? Theme.accent : (root.tone == 2 ? Theme.success : (root.tone == 1 ? Theme.primary-bright : Theme.text-soft)));
@@ -91,13 +109,13 @@ export component Badge inherits Rectangle {
     border-radius: 11px;
     background: root.badge-background;
     border-width: 1px;
-    border-color: root.badge-color;
+    border-color: badge-focus.has-focus ? Theme.primary-bright : root.badge-color;
     horizontal-stretch: 0;
     vertical-stretch: 0;
     forward-focus: badge-focus;
-    accessible-role: button;
+    accessible-role: AccessibleRole.text;
     accessible-label: root.text;
-    accessible-action-default => { root.clicked(); }
+    accessible-action-default => { if root.interactive { root.clicked(); } }
 
     HorizontalLayout {
         padding-left: 9px;
@@ -113,7 +131,8 @@ export component Badge inherits Rectangle {
     }
 
     badge-touch := TouchArea {
-        mouse-cursor: pointer;
+        enabled: root.interactive;
+        mouse-cursor: root.interactive ? pointer : default;
         clicked => {
             badge-focus.focus();
             root.clicked();
@@ -121,8 +140,10 @@ export component Badge inherits Rectangle {
     }
 
     badge-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
+        enabled: root.interactive;
 
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
@@ -166,8 +187,9 @@ export component HelpBadge inherits Rectangle {
     if root.description != "": Tooltip { text: @markdown("\{root.description}"); }
 
     help-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
 
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
@@ -270,8 +292,9 @@ export component FlatButton inherits Rectangle {
     }
 
     button-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
         enabled: root.enabled;
 
         key-pressed(event) => {
@@ -330,8 +353,9 @@ export component SelectableButton inherits Rectangle {
     }
 
     select-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
         enabled: root.enabled;
 
         key-pressed(event) => {
@@ -386,8 +410,9 @@ export component IconButton inherits Rectangle {
     if root.description != "": Tooltip { text: @markdown("\{root.description}"); }
 
     icon-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
 
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
@@ -448,8 +473,9 @@ export component NavButton inherits Rectangle {
     }
 
     nav-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
 
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
@@ -602,7 +628,7 @@ export component ToggleRow inherits Rectangle {
     callback toggled;
     property <bool> hovered: toggle-touch.has-hover;
 
-    min-height: 58px;
+    height: max(58px, toggle-labels.preferred-height + 24px);
     vertical-stretch: 0;
     border-radius: 6px;
     background: root.hovered && root.enabled ? Theme.surface-hover : transparent;
@@ -630,12 +656,12 @@ export component ToggleRow inherits Rectangle {
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
-        padding-top: 7px;
-        padding-bottom: 7px;
+        padding-top: 12px;
+        padding-bottom: 12px;
         spacing: 20px;
         cross-axis-alignment: center;
 
-        VerticalLayout {
+        toggle-labels := VerticalLayout {
             horizontal-stretch: 1;
             cross-axis-alignment: stretch;
             spacing: 3px;
@@ -645,6 +671,7 @@ export component ToggleRow inherits Rectangle {
                 cross-axis-alignment: center;
                 width: 100%;
                 Text {
+                    height: self.preferred-height;
                     horizontal-alignment: left;
                     text: root.title;
                     color: root.enabled ? Theme.text : Theme.text-muted;
@@ -661,6 +688,7 @@ export component ToggleRow inherits Rectangle {
                 Rectangle { horizontal-stretch: 1; background: transparent; }
             }
             if root.description != "": Text {
+                height: self.preferred-height;
                 horizontal-alignment: left;
                 text: root.description;
                 color: Theme.text-muted;
@@ -680,8 +708,9 @@ export component ToggleRow inherits Rectangle {
     }
 
     toggle-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
         enabled: root.enabled;
 
         key-pressed(event) => {
@@ -716,6 +745,12 @@ export component CompactSelect inherits Rectangle {
     in property <string> hint: "";
     in property <string> placeholder-text: "";
     property <bool> hovered: select-touch.has-hover;
+    property <int> highlighted-index: 0;
+
+    function open-choices() {
+        root.highlighted-index = clamp(root.current-index, 0, max(0, root.model.length - 1));
+        choices.show();
+    }
 
     height: 32px;
     min-width: 150px;
@@ -733,7 +768,7 @@ export component CompactSelect inherits Rectangle {
     accessible-expandable: true;
     accessible-expanded: choices.is-open;
     accessible-value: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : root.placeholder-text;
-    accessible-action-expand => { if (root.control-enabled) { choices.show(); } }
+    accessible-action-expand => { if (root.control-enabled) { root.open-choices(); } }
 
     HorizontalLayout {
         padding-left: 10px;
@@ -758,8 +793,9 @@ export component CompactSelect inherits Rectangle {
     }
 
     select-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
         enabled: root.control-enabled;
 
         key-pressed(event) => {
@@ -780,7 +816,7 @@ export component CompactSelect inherits Rectangle {
                 return accept;
             }
             if event.text == Key.Space || event.text == Key.Return {
-                choices.show();
+                root.open-choices();
                 return accept;
             }
             return reject;
@@ -792,7 +828,7 @@ export component CompactSelect inherits Rectangle {
         mouse-cursor: root.control-enabled ? pointer : default;
         clicked => {
             select-focus.focus();
-            choices.show();
+            root.open-choices();
         }
     }
 
@@ -801,6 +837,39 @@ export component CompactSelect inherits Rectangle {
         y: root.height + 4px;
         width: root.width;
         height: root.model.length * 32px + 8px;
+
+        popup-focus := FocusScope {
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if event.text == Key.DownArrow {
+                    root.highlighted-index = min(root.model.length - 1, root.highlighted-index + 1);
+                    return accept;
+                }
+                if event.text == Key.UpArrow {
+                    root.highlighted-index = max(0, root.highlighted-index - 1);
+                    return accept;
+                }
+                if event.text == Key.Home { root.highlighted-index = 0; return accept; }
+                if event.text == Key.End { root.highlighted-index = max(0, root.model.length - 1); return accept; }
+                if event.text == Key.Return || event.text == Key.Space {
+                    root.current-index = root.highlighted-index;
+                    choices.close();
+                    select-focus.focus();
+                    return accept;
+                }
+                if event.text == Key.Escape {
+                    choices.close();
+                    select-focus.focus();
+                    return accept;
+                }
+                if event.text == Key.Tab || event.text == Key.Backtab {
+                    choices.close();
+                    select-focus.focus();
+                    return reject;
+                }
+                return reject;
+            }
+        }
 
         Rectangle {
             background: Theme.surface-raised;
@@ -814,7 +883,9 @@ export component CompactSelect inherits Rectangle {
                 for option[index] in root.model: Rectangle {
                     height: 32px;
                     border-radius: 5px;
-                    background: index == root.current-index ? Theme.primary-soft : (option-touch.has-hover ? Theme.surface-hover : transparent);
+                    border-width: index == root.highlighted-index ? 1px : 0px;
+                    border-color: Theme.primary-bright;
+                    background: index == root.current-index ? Theme.primary-soft : (index == root.highlighted-index || option-touch.has-hover ? Theme.surface-hover : transparent);
 
                     Text {
                         text: option;
@@ -856,13 +927,13 @@ export component NumberStepper inherits Rectangle {
     vertical-stretch: 0;
     border-radius: Theme.control-radius;
     border-width: 1px;
-    border-color: stepper-focus.has-focus ? Theme.primary : Theme.border;
+    border-color: number-input.has-focus ? Theme.primary : Theme.border;
     background: Theme.surface-raised;
     opacity: root.enabled ? 1 : 0.5;
-    forward-focus: stepper-focus;
+    forward-focus: number-input;
     accessible-role: spinbox;
     accessible-label: root.label;
-    accessible-description: root.hint;
+    accessible-description: root.hint + (root.hint == "" ? "" : " ") + "Type a number, or use the arrow keys to adjust it.";
     accessible-enabled: root.enabled;
     accessible-value: root.value;
     accessible-value-minimum: root.minimum;
@@ -870,6 +941,20 @@ export component NumberStepper inherits Rectangle {
     accessible-value-step: root.step-size;
     accessible-action-increment => { if root.enabled { root.value = min(root.maximum, root.value + root.step-size); } }
     accessible-action-decrement => { if root.enabled { root.value = max(root.minimum, root.value - root.step-size); } }
+    accessible-action-set-value(value) => {
+        if root.enabled && value.is-float() {
+            root.value = round(clamp(value.to-float(), root.minimum, root.maximum));
+        }
+    }
+
+    changed value => { number-input.text = root.value; }
+
+    function commit-input() {
+        if number-input.text.is-float() {
+            root.value = round(clamp(number-input.text.to-float(), root.minimum, root.maximum));
+        }
+        number-input.text = root.value;
+    }
 
     HorizontalLayout {
         minus := Rectangle {
@@ -887,21 +972,77 @@ export component NumberStepper inherits Rectangle {
                 enabled: root.enabled && root.value > root.minimum;
                 mouse-cursor: self.enabled ? pointer : default;
                 clicked => {
-                    stepper-focus.focus();
+                    number-input.focus();
+                    root.commit-input();
                     root.value = max(root.minimum, root.value - root.step-size);
                 }
             }
         }
         Rectangle { width: 1px; background: Theme.border; }
-        Text {
+        Rectangle {
             min-width: 54px;
             horizontal-stretch: 1;
-            text: "\{root.value}";
-            color: Theme.text;
-            font-size: 13px;
-            font-weight: 600;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+
+            number-input := TextInput {
+                width: parent.width;
+                height: parent.height;
+                text: "\{root.value}";
+                enabled: root.enabled;
+                input-type: InputType.number;
+                single-line: true;
+                color: Theme.text;
+                selection-background-color: Theme.primary;
+                selection-foreground-color: Theme.bg;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                accessible-role: none;
+
+                edited => {
+                    if self.text.is-float() {
+                        root.value = round(clamp(self.text.to-float(), root.minimum, root.maximum));
+                        if self.text.to-float() != root.value { self.text = root.value; }
+                    }
+                }
+                accepted => { root.commit-input(); }
+                changed has-focus => {
+                    if !self.has-focus { root.commit-input(); }
+                }
+                key-pressed(event) => {
+                    if event.text == Key.UpArrow {
+                        root.commit-input();
+                        root.value = min(root.maximum, root.value + root.step-size);
+                        return accept;
+                    }
+                    if event.text == Key.DownArrow {
+                        root.commit-input();
+                        root.value = max(root.minimum, root.value - root.step-size);
+                        return accept;
+                    }
+                    if event.text == Key.PageUp {
+                        root.commit-input();
+                        root.value = min(root.maximum, root.value + root.step-size * 10);
+                        return accept;
+                    }
+                    if event.text == Key.PageDown {
+                        root.commit-input();
+                        root.value = max(root.minimum, root.value - root.step-size * 10);
+                        return accept;
+                    }
+                    if event.text == Key.Home {
+                        root.value = root.minimum;
+                        self.text = root.value;
+                        return accept;
+                    }
+                    if event.text == Key.End {
+                        root.value = root.maximum;
+                        self.text = root.value;
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
         }
         Rectangle { width: 1px; background: Theme.border; }
         plus := Rectangle {
@@ -919,44 +1060,11 @@ export component NumberStepper inherits Rectangle {
                 enabled: root.enabled && root.value < root.maximum;
                 mouse-cursor: self.enabled ? pointer : default;
                 clicked => {
-                    stepper-focus.focus();
+                    number-input.focus();
+                    root.commit-input();
                     root.value = min(root.maximum, root.value + root.step-size);
                 }
             }
-        }
-    }
-
-    stepper-focus := FocusScope {
-        width: 0px;
-        height: 0px;
-        enabled: root.enabled;
-
-        key-pressed(event) => {
-            if event.text == Key.UpArrow {
-                root.value = min(root.maximum, root.value + root.step-size);
-                return accept;
-            }
-            if event.text == Key.DownArrow {
-                root.value = max(root.minimum, root.value - root.step-size);
-                return accept;
-            }
-            if event.text == Key.PageUp {
-                root.value = min(root.maximum, root.value + root.step-size * 10);
-                return accept;
-            }
-            if event.text == Key.PageDown {
-                root.value = max(root.minimum, root.value - root.step-size * 10);
-                return accept;
-            }
-            if event.text == Key.Home {
-                root.value = root.minimum;
-                return accept;
-            }
-            if event.text == Key.End {
-                root.value = root.maximum;
-                return accept;
-            }
-            return reject;
         }
     }
 }
@@ -1019,28 +1127,33 @@ export component InlineNotice inherits Rectangle {
 export component ChoiceCard inherits Rectangle {
     in property <string> title;
     in property <string> subtitle: "";
-    in property <length> subtitle-min-height: 0px;
     in property <bool> selected: false;
+    in property <bool> enabled: true;
     callback clicked;
     property <bool> hovered: choice-touch.has-hover;
 
     height: 76px;
     border-radius: 9px;
     border-width: 1px;
-    border-color: root.selected ? Theme.primary : (root.hovered ? Theme.border-bright : Theme.border);
+    border-color: choice-focus.has-focus ? Theme.primary-bright : root.selected ? Theme.primary : (root.hovered ? Theme.border-bright : Theme.border);
     background: root.selected ? Theme.primary-soft : (root.hovered ? Theme.surface-hover : Theme.surface);
+    opacity: root.enabled ? 1 : 0.5;
     forward-focus: choice-focus;
-    accessible-role: checkbox;
+    accessible-role: radio-button;
     accessible-label: root.title;
     accessible-description: root.subtitle;
     accessible-checkable: true;
     accessible-checked: root.selected;
-    accessible-action-default => { root.clicked(); }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
 
     HorizontalLayout {
         padding-left: 14px;
-        padding-right: 12px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
         spacing: 11px;
+        cross-axis-alignment: center;
 
         VerticalLayout {
             width: 18px;
@@ -1067,8 +1180,9 @@ export component ChoiceCard inherits Rectangle {
         }
         VerticalLayout {
             horizontal-stretch: 1;
+            vertical-stretch: 0;
             alignment: center;
-            spacing: 2px;
+            spacing: 3px;
 
             Text {
                 text: root.title;
@@ -1078,7 +1192,6 @@ export component ChoiceCard inherits Rectangle {
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
-                min-height: root.subtitle-min-height;
                 color: Theme.text-muted;
                 font-size: 12px;
                 wrap: word-wrap;
@@ -1087,8 +1200,10 @@ export component ChoiceCard inherits Rectangle {
     }
 
     choice-focus := FocusScope {
-        width: 0px;
-        height: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
+        enabled: root.enabled;
 
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
@@ -1100,7 +1215,8 @@ export component ChoiceCard inherits Rectangle {
     }
 
     choice-touch := TouchArea {
-        mouse-cursor: pointer;
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             choice-focus.focus();
             root.clicked();

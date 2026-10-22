@@ -3,13 +3,36 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 output_dir="$project_root/docs/screenshots"
+binary="${1:-}"
 
-for command_name in cargo import mogrify sqlite3 Xvfb xdotool; do
+if [[ "$#" -gt 1 ]]; then
+	echo "usage: $0 [existing-desktop-binary]" >&2
+	exit 1
+fi
+
+for command_name in import mogrify sqlite3 Xvfb xdotool; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		echo "missing required command: $command_name" >&2
 		exit 1
 	fi
 done
+
+if [[ -z "$binary" ]]; then
+	if ! command -v cargo >/dev/null 2>&1; then
+		echo "missing required command: cargo (or pass an existing desktop binary)" >&2
+		exit 1
+	fi
+	# Use the low-memory profile and one compiler job; enforce any hard memory
+	# limit with the caller's container or cgroup.
+	CARGO_INCREMENTAL=0 cargo build --manifest-path "$project_root/Cargo.toml" \
+		--locked --profile ci --jobs 1 --config profile.ci.package.sharer.opt-level=0 \
+		--features desktop --bin ShareR
+	binary="${CARGO_TARGET_DIR:-$project_root/target}/ci/ShareR"
+fi
+if [[ ! -x "$binary" ]]; then
+	echo "desktop binary is not executable: $binary" >&2
+	exit 1
+fi
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/sharer-screenshots.XXXXXX")"
 app_pid=""
@@ -48,8 +71,6 @@ if ! DISPLAY="$display_value" xdotool getmouselocation >/dev/null 2>&1; then
 	exit 1
 fi
 
-cargo build --manifest-path "$project_root/Cargo.toml" --features desktop --bin ShareR
-binary="$project_root/target/debug/ShareR"
 config_root="$work_dir/config"
 
 XDG_CONFIG_HOME="$config_root" SHARER_CONFIG_DIR="$config_root/sharer" "$binary" --init https://uploads.example/upload >/dev/null

@@ -69,6 +69,8 @@ export component AppWindow inherits Window {
     in-out property <string> hotkey-status: "";
     in-out property <string> status-text: "Ready";
     in-out property <string> status-detail: "";
+    in-out property <string> history-action-detail: "";
+    in-out property <bool> history-action-failed: false;
     in-out property <string> last-link: "";
     in-out property <string> last-local-path: "";
     in-out property <string> last-delete-url: "";
@@ -111,6 +113,7 @@ export component AppWindow inherits Window {
     in-out property <string> wizard-capture-directory: "";
 
     property <bool> uploader-configured: root.uploader-kind == 0 ? root.uploader-url != "" : root.uploader-kind == 4 ? root.imgur-credential != "" : root.uploader-kind == 5 ? root.pixeldrain-credential != "" : root.uploader-kind == 6 ? root.sul-credential != "" : root.uploader-kind >= 1 && root.uploader-kind <= 3;
+    property <bool> show-history-action-status: root.current-page == 1 && !root.busy && !root.uploading && !root.recording && root.history-action-detail != "";
     property <bool> status-is-error: root.status-text == "Upload failed"
             || root.status-text == "Upload cancelled"
             || root.status-text == "Upload timed out"
@@ -121,6 +124,7 @@ export component AppWindow inherits Window {
             || root.status-text == "Save failed"
             || root.status-text == "Settings invalid"
             || root.status-text == "Settings not saved"
+            || root.status-text == "History action failed"
             || root.status-text == "Setup required";
 
     in property <bool> presentation-ready: false;
@@ -178,6 +182,14 @@ export component AppWindow inherits Window {
         }
     }
 
+    changed show-onboarding => {
+        if !root.show-onboarding {
+            if root.current-page == 1 { history-navigation.focus(); }
+            else if root.current-page == 2 { settings-navigation.focus(); }
+            else { capture-navigation.focus(); }
+        }
+    }
+
     changed uploader-kind => { root.settings-edited(); }
     changed uploader-url => { root.settings-edited(); }
     changed imgur-credential => { root.settings-edited(); }
@@ -213,193 +225,203 @@ export component AppWindow inherits Window {
 
     icon: root.app-icon;
 
-    HorizontalLayout {
-        spacing: 0px;
+    // Hiding this subtree keeps setup's keyboard traversal and pointer input modal.
+    // The view instances remain alive so replay preserves the underlying page state.
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        visible: !root.show-onboarding;
 
-        Rectangle {
-            width: 176px;
-            background: Theme.sidebar;
+        HorizontalLayout {
+            spacing: 0px;
 
-            VerticalLayout {
-                padding: 12px;
-                spacing: 6px;
+            Rectangle {
+                width: 176px;
+                background: Theme.sidebar;
 
-                HorizontalLayout {
-                    height: 48px;
-                    spacing: 9px;
-                    alignment: start;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
 
-                    IconBox { icon-source: root.app-icon; tint: transparent; icon-size: 32px; box-width: 32px; }
-                    Text { text: "ShareR"; color: Theme.text; font-size: 19px; font-weight: 600; vertical-alignment: center; }
+                    HorizontalLayout {
+                        height: 48px;
+                        spacing: 9px;
+                        alignment: start;
+
+                        IconBox { icon-source: root.app-icon; tint: transparent; icon-size: 32px; box-width: 32px; }
+                        Text { text: "ShareR"; color: Theme.text; font-size: 19px; font-weight: 600; vertical-alignment: center; }
+                    }
+
+                    Rectangle { height: 4px; background: transparent; }
+                    capture-navigation := NavButton { text: "Capture"; icon-source: Icons.capture; selected: root.current-page == 0; clicked => { root.current-page = 0; } }
+                    history-navigation := NavButton { text: "History"; icon-source: Icons.history; selected: root.current-page == 1; clicked => { root.current-page = 1; } }
+                    settings-navigation := NavButton { text: "Settings"; icon-source: Icons.settings; selected: root.current-page == 2; clicked => { root.current-page = 2; } }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+
+                    CaptionText { text: "v" + root.app-version; horizontal-alignment: center; }
                 }
-
-                Rectangle { height: 4px; background: transparent; }
-                NavButton { text: "Capture"; icon-source: Icons.capture; selected: root.current-page == 0; clicked => { root.current-page = 0; } }
-                NavButton { text: "History"; icon-source: Icons.history; selected: root.current-page == 1; clicked => { root.current-page = 1; } }
-                NavButton { text: "Settings"; icon-source: Icons.settings; selected: root.current-page == 2; clicked => { root.current-page = 2; } }
-
-                Rectangle { vertical-stretch: 1; background: transparent; }
-
-                CaptionText { text: "v" + root.app-version; horizontal-alignment: center; }
             }
-        }
 
-        Rectangle {
-            horizontal-stretch: 1;
-            min-height: 0px;
-            background: Theme.bg;
+            Rectangle {
+                horizontal-stretch: 1;
+                min-height: 0px;
+                background: Theme.bg;
 
-            VerticalLayout {
-                spacing: 0px;
+                VerticalLayout {
+                    spacing: 0px;
 
-                Rectangle {
-                    vertical-stretch: 1;
-                    min-height: 0px;
+                    Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 0px;
 
-                    if root.current-page == 0: CaptureView {
-                        x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
-                        busy: root.busy;
-                        uploading: root.uploading;
-                        upload-progress: root.upload-progress;
-                        recording: root.recording;
-                        configured: root.uploader-configured;
-                        auto-upload: root.auto-upload-captures;
-                        uploader-name: root.uploader-name;
-                        capture-enabled: root.save-captures || (root.auto-upload-captures && root.uploader-configured);
-                        region-hotkey: root.region-hotkey-label;
-                        recording-hotkey: root.recording-hotkey-label;
-                        screen-hotkey: root.screen-hotkey-label;
-                        clipboard-hotkey: root.clipboard-hotkey-label;
-                        status-text: root.presentation-ready ? root.display-text(root.status-text) : "";
-                        status-detail: root.presentation-ready ? root.display-text(root.status-detail) : "";
-                        last-link: root.presentation-ready ? root.display-text(root.last-link) : "";
-                        last-local-path: root.presentation-ready ? root.display-text(root.last-local-path) : "";
-                        last-delete-url: root.last-delete-url;
-                        last-delete-saved: root.last-delete-saved;
-                        update-available: root.update-available;
-                        update-version: root.presentation-ready ? root.display-text(root.update-version) : "";
-                        capture-region => { root.capture-region(); }
-                        record-region => { root.record-region(); }
-                        capture-screen => { root.capture-screen(); }
-                        upload-clipboard => { root.upload-clipboard(); }
-                        choose-file => { root.choose-file(); }
-                        cancel-upload => { root.cancel-upload(); }
-                        open-link => { root.open-link(); }
-                        copy-link => { root.copy-last-link(); }
-                        copy-delete => { root.copy-last-delete(); }
-                        open-delete => { root.open-last-delete(); }
-                        open-local => { root.open-last-local(); }
-                        reveal-local => { root.reveal-last-local(); }
-                        copy-file => { root.copy-last-file(); }
-                        open-update => { root.open-update(); }
-                        show-settings => {
-                            root.settings-section = 2;
-                            root.current-page = 2;
+                        if root.current-page == 0: CaptureView {
+                            x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
+                            busy: root.busy;
+                            settings-dirty: root.settings-dirty;
+                            uploading: root.uploading;
+                            upload-progress: root.upload-progress;
+                            recording: root.recording;
+                            configured: root.uploader-configured;
+                            auto-upload: root.auto-upload-captures;
+                            uploader-name: root.uploader-name;
+                            capture-enabled: root.save-captures || (root.auto-upload-captures && root.uploader-configured);
+                            region-hotkey: root.region-hotkey-label;
+                            recording-hotkey: root.recording-hotkey-label;
+                            screen-hotkey: root.screen-hotkey-label;
+                            clipboard-hotkey: root.clipboard-hotkey-label;
+                            status-text: root.presentation-ready ? root.display-text(root.status-text) : "";
+                            status-detail: root.presentation-ready ? root.display-text(root.status-detail) : "";
+                            last-link: root.presentation-ready ? root.display-text(root.last-link) : "";
+                            last-local-path: root.presentation-ready ? root.display-text(root.last-local-path) : "";
+                            last-delete-url: root.last-delete-url;
+                            last-delete-saved: root.last-delete-saved;
+                            update-available: root.update-available;
+                            update-version: root.presentation-ready ? root.display-text(root.update-version) : "";
+                            capture-region => { root.capture-region(); }
+                            record-region => { root.record-region(); }
+                            capture-screen => { root.capture-screen(); }
+                            upload-clipboard => { root.upload-clipboard(); }
+                            choose-file => { root.choose-file(); }
+                            cancel-upload => { root.cancel-upload(); }
+                            open-link => { root.open-link(); }
+                            copy-link => { root.copy-last-link(); }
+                            copy-delete => { root.copy-last-delete(); }
+                            open-delete => { root.open-last-delete(); }
+                            open-local => { root.open-last-local(); }
+                            reveal-local => { root.reveal-last-local(); }
+                            copy-file => { root.copy-last-file(); }
+                            open-update => { root.open-update(); }
+                            show-settings => {
+                                root.settings-section = 2;
+                                root.current-page = 2;
+                            }
+                            review-settings => { root.current-page = 2; }
+                            show-capture-settings => {
+                                root.settings-section = 1;
+                                root.current-page = 2;
+                            }
+                            show-general-settings => {
+                                root.settings-section = 0;
+                                root.current-page = 2;
+                            }
                         }
-                        show-capture-settings => {
-                            root.settings-section = 1;
-                            root.current-page = 2;
+
+                        if root.current-page == 1: HistoryView {
+                            x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
+                            rows: root.history-rows;
+                            page-label: root.history-page-label;
+                            has-previous: root.history-has-previous;
+                            has-next: root.history-has-next;
+                            sort-column: root.history-sort-column;
+                            sort-ascending: root.history-sort-ascending;
+                            upload-enabled: root.uploader-configured && !root.busy && !root.settings-dirty && !root.show-onboarding;
+                            upload-provider: root.uploader-name;
+                            settings-dirty: root.settings-dirty;
+                            open-link(action-token) => { root.open-history-link(action-token); }
+                            copy-link(action-token) => { root.copy-history-link(action-token); }
+                            copy-delete-link(action-token) => { root.copy-history-delete(action-token); }
+                            open-delete-link(action-token) => { root.open-history-delete(action-token); }
+                            open-local(action-token) => { root.open-history-local(action-token); }
+                            reveal-local(action-token) => { root.reveal-history-local(action-token); }
+                            upload-local(action-token) => { root.upload-history-local(action-token); }
+                            copy-file(action-token) => { root.copy-history-file(action-token); }
+                            copy-path(action-token) => { root.copy-history-path(action-token); }
+                            show-settings => { root.current-page = 2; }
+                            remove-entry(action-token) => { root.remove-history-entry(action-token); }
+                            delete-local(action-token) => { root.delete-history-local(action-token); }
+                            previous-page => { root.history-previous(); }
+                            next-page => { root.history-next(); }
+                            sort-column-clicked(column) => { root.history-sort-column-clicked(column); }
+                            show-capture => { root.current-page = 0; }
                         }
-                        show-general-settings => {
-                            root.settings-section = 0;
-                            root.current-page = 2;
+
+                        if root.current-page == 2: SettingsView {
+                            x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
+                            selected-section <=> root.settings-section;
+                            busy: root.busy;
+                            uploader-kind <=> root.uploader-kind;
+                            uploader-name: root.uploader-name;
+                            uploader-url <=> root.uploader-url;
+                            imgur-credential <=> root.imgur-credential;
+                            pixeldrain-credential <=> root.pixeldrain-credential;
+                            provider-names: root.provider-names;
+                            provider-limits: root.provider-limits;
+                            sul-credential <=> root.sul-credential;
+                            upload-header-name <=> root.upload-header-name;
+                            upload-header-value <=> root.upload-header-value;
+                            custom-endpoint-edited => { root.custom-endpoint-edited(); }
+                            custom-header-edited => { root.custom-header-edited(); }
+                            lifetime-seconds <=> root.lifetime-seconds;
+                            recording-fps <=> root.recording-fps;
+                            recording-max-seconds <=> root.recording-max-seconds;
+                            recording-max-gib <=> root.recording-max-gib;
+                            save-captures <=> root.save-captures;
+                            auto-upload-captures <=> root.auto-upload-captures;
+                            force-sdr-captures <=> root.force-sdr-captures;
+                            capture-resolution <=> root.capture-resolution;
+                            resize-quality <=> root.resize-quality;
+                            retina-scaling-available: root.retina-scaling-available;
+                            remove-exif <=> root.remove-exif;
+                            capture-directory <=> root.capture-directory;
+                            minimize-to-tray <=> root.minimize-to-tray;
+                            start-at-login <=> root.start-at-login;
+                            completion-sound <=> root.completion-sound;
+                            copy-link-after-upload <=> root.copy-link-after-upload;
+                            region-hotkey <=> root.region-hotkey;
+                            recording-hotkey <=> root.recording-hotkey;
+                            screen-hotkey <=> root.screen-hotkey;
+                            clipboard-hotkey <=> root.clipboard-hotkey;
+                            capture-name-mode <=> root.capture-name-mode;
+                            capture-custom-name <=> root.capture-custom-name;
+                            require-tor <=> root.require-tor;
+                            tray-click-action <=> root.tray-click-action;
+                            configured: root.uploader-configured;
+                            hotkey-status: root.hotkey-status;
+                            app-version: root.app-version;
+                            update-status: root.presentation-ready ? root.display-text(root.update-status) : "";
+                            update-available: root.update-available;
+                            settings-dirty: root.settings-dirty;
+                            onboarding-complete: root.onboarding-complete;
+                            shortcut-recording <=> root.shortcut-recording;
+                            choose-capture-folder => { root.choose-capture-folder(); }
+                            open-capture-folder => { root.open-capture-folder(); }
+                            save-settings => { root.save-settings(); }
+                            discard-settings => { root.discard-settings(); }
+                            open-update => { root.open-update(); }
+                            shortcut-recording-started => { root.shortcut-recording-started(); }
+                            shortcut-recording-finished => { root.shortcut-recording-finished(); }
+                            restart-onboarding => { root.onboarding-restart(); }
+                            reset-settings => { root.reset-settings(); }
                         }
                     }
 
-                    if root.current-page == 1: HistoryView {
-                        x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
-                        rows: root.history-rows;
-                        page-label: root.history-page-label;
-                        has-previous: root.history-has-previous;
-                        has-next: root.history-has-next;
-                        sort-column: root.history-sort-column;
-                        sort-ascending: root.history-sort-ascending;
-                        upload-enabled: !root.busy && !root.settings-dirty && !root.show-onboarding;
-                        upload-provider: root.uploader-name;
-                        settings-dirty: root.settings-dirty;
-                        open-link(action-token) => { root.open-history-link(action-token); }
-                        copy-link(action-token) => { root.copy-history-link(action-token); }
-                        copy-delete-link(action-token) => { root.copy-history-delete(action-token); }
-                        open-delete-link(action-token) => { root.open-history-delete(action-token); }
-                        open-local(action-token) => { root.open-history-local(action-token); }
-                        reveal-local(action-token) => { root.reveal-history-local(action-token); }
-                        upload-local(action-token) => { root.upload-history-local(action-token); }
-                        copy-file(action-token) => { root.copy-history-file(action-token); }
-                        copy-path(action-token) => { root.copy-history-path(action-token); }
-                        show-settings => { root.current-page = 2; }
-                        remove-entry(action-token) => { root.remove-history-entry(action-token); }
-                        delete-local(action-token) => { root.delete-history-local(action-token); }
-                        previous-page => { root.history-previous(); }
-                        next-page => { root.history-next(); }
-                        sort-column-clicked(column) => { root.history-sort-column-clicked(column); }
-                        show-capture => { root.current-page = 0; }
+                    StatusBar {
+                        text: root.presentation-ready ? root.display-text(root.show-history-action-status ? (root.history-action-failed ? "History action failed" : "History") : root.status-text) : "";
+                        detail: root.presentation-ready ? root.display-text(root.show-history-action-status ? root.history-action-detail : root.status-detail) : "";
+                        busy: root.busy || root.uploading || root.recording;
+                        error: root.show-history-action-status ? root.history-action-failed : root.status-is-error;
                     }
-
-                    if root.current-page == 2: SettingsView {
-                        x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
-                        selected-section <=> root.settings-section;
-                        busy: root.busy || root.show-onboarding;
-                        uploader-kind <=> root.uploader-kind;
-                        uploader-name: root.uploader-name;
-                        uploader-url <=> root.uploader-url;
-                        imgur-credential <=> root.imgur-credential;
-                        pixeldrain-credential <=> root.pixeldrain-credential;
-                        provider-names: root.provider-names;
-                        provider-limits: root.provider-limits;
-                        sul-credential <=> root.sul-credential;
-                        upload-header-name <=> root.upload-header-name;
-                        upload-header-value <=> root.upload-header-value;
-                        custom-endpoint-edited => { root.custom-endpoint-edited(); }
-                        custom-header-edited => { root.custom-header-edited(); }
-                        lifetime-seconds <=> root.lifetime-seconds;
-                        recording-fps <=> root.recording-fps;
-                        recording-max-seconds <=> root.recording-max-seconds;
-                        recording-max-gib <=> root.recording-max-gib;
-                        save-captures <=> root.save-captures;
-                        auto-upload-captures <=> root.auto-upload-captures;
-                        force-sdr-captures <=> root.force-sdr-captures;
-                        capture-resolution <=> root.capture-resolution;
-                        resize-quality <=> root.resize-quality;
-                        retina-scaling-available: root.retina-scaling-available;
-                        remove-exif <=> root.remove-exif;
-                        capture-directory <=> root.capture-directory;
-                        minimize-to-tray <=> root.minimize-to-tray;
-                        start-at-login <=> root.start-at-login;
-                        completion-sound <=> root.completion-sound;
-                        copy-link-after-upload <=> root.copy-link-after-upload;
-                        region-hotkey <=> root.region-hotkey;
-                        recording-hotkey <=> root.recording-hotkey;
-                        screen-hotkey <=> root.screen-hotkey;
-                        clipboard-hotkey <=> root.clipboard-hotkey;
-                        capture-name-mode <=> root.capture-name-mode;
-                        capture-custom-name <=> root.capture-custom-name;
-                        require-tor <=> root.require-tor;
-                        tray-click-action <=> root.tray-click-action;
-                        configured: root.uploader-configured;
-                        hotkey-status: root.hotkey-status;
-                        app-version: root.app-version;
-                        update-status: root.presentation-ready ? root.display-text(root.update-status) : "";
-                        update-available: root.update-available;
-                        settings-dirty: root.settings-dirty;
-                        onboarding-complete: root.onboarding-complete;
-                        shortcut-recording <=> root.shortcut-recording;
-                        choose-capture-folder => { root.choose-capture-folder(); }
-                        open-capture-folder => { root.open-capture-folder(); }
-                        save-settings => { root.save-settings(); }
-                        discard-settings => { root.discard-settings(); }
-                        open-update => { root.open-update(); }
-                        shortcut-recording-started => { root.shortcut-recording-started(); }
-                        shortcut-recording-finished => { root.shortcut-recording-finished(); }
-                        restart-onboarding => { root.onboarding-restart(); }
-                        reset-settings => { root.reset-settings(); }
-                    }
-                }
-
-                StatusBar {
-                    text: root.presentation-ready ? root.display-text(root.status-text) : "";
-                    detail: root.presentation-ready ? root.display-text(root.status-detail) : "";
-                    busy: root.busy || root.uploading || root.recording;
-                    error: root.status-is-error;
                 }
             }
         }

@@ -225,8 +225,11 @@ pub(super) fn upload_detail(upload: &ProcessedUpload, uploaded: bool) -> String 
     }
 
     if let Some(failure) = &upload.upload_failure {
-        push_detail(&mut detail, failure.stage.status());
-        let _ = write!(detail, ": {:#}", failure.error);
+        if failure.stage == FailureStage::UploadCancelled {
+            push_detail(&mut detail, failure.stage.status());
+        } else {
+            push_detail(&mut detail, &format!("{:#}", failure.error));
+        }
     }
 
     detail
@@ -326,6 +329,13 @@ pub(super) fn invalidate_latest_local_path(
         window.set_last_local_path(String::new().into());
     }
 
+    if window_matches {
+        let mut detail = window.get_status_detail().to_string();
+
+        push_detail(&mut detail, "Local file no longer available");
+        window.set_status_detail(detail.into());
+    }
+
     window_matches || activity_matches
 }
 
@@ -340,8 +350,13 @@ pub(super) fn invalidate_activity_local_path(
             || std::path::Path::new(&snapshot.local_path) == path
     });
 
-    if matches && let Some(snapshot) = activity.as_mut() {
+    if matches
+        && let Some(snapshot) = activity
+            .as_mut()
+            .filter(|snapshot| !snapshot.local_path.is_empty())
+    {
         snapshot.local_path.clear();
+        push_detail(&mut snapshot.detail, "Local file no longer available");
     }
 
     matches
@@ -376,7 +391,12 @@ pub(super) fn apply_update(window: &AppWindow, update: &UpdateCheck) {
 
         UpdateCheck::Failed(error) => {
             window.set_update_available(false);
-            window.set_update_status(format!("Update check unavailable: {error}").into());
+            let _ = crate::write_error(
+                &mut std::io::stderr().lock(),
+                &anyhow::anyhow!("Update check unavailable: {error}"),
+            );
+
+            window.set_update_status("Could not check for updates. Try again later.".into());
         }
     }
 }

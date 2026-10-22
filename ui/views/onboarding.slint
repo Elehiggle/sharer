@@ -1,6 +1,6 @@
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { ChoiceCard, CompactField, FlatButton, IconBox, SelectableButton, ToggleRow } from "../components.slint";
+import { AppScrollView, CompactField, FlatButton, IconBox, SelectableButton, ToggleRow } from "../components.slint";
+import { ProviderPicker } from "../provider-picker.slint";
 
 export component OnboardingView inherits Rectangle {
     in-out property <int> step: 0;
@@ -73,139 +73,62 @@ export component OnboardingView inherits Rectangle {
 
             Rectangle { height: 1px; background: Theme.border; }
 
-            if root.step == 0: ScrollView {
+            if root.step == 0: choice-scroll := AppScrollView {
+                Timer {
+                    interval: 16ms;
+                    running: true;
+                    triggered => {
+                        self.running = false;
+                        destinations.focus-first();
+                        choice-scroll.viewport-y = 0px;
+                    }
+                }
                 vertical-stretch: 1;
                 min-height: 0px;
 
                 VerticalLayout {
-                    padding-right: 6px;
-                    spacing: 14px;
+                    spacing: 12px;
 
                     Text { text: "Where should uploads go?"; color: Theme.text; font-size: root.compact ? 18px : 21px; font-weight: 600; }
                     Text { text: root.resetting ? "Review reset defaults. Credentials, capture folder, history and files are kept. Nothing changes until you finish." : "Pick a destination. Nothing changes until you finish."; color: Theme.text-soft; font-size: 13px; wrap: word-wrap; }
 
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        ChoiceCard {
-                            horizontal-stretch: 1;
-                            min-width: 0px;
-                            preferred-width: 0px;
-                            title: "Local only";
-                            subtitle: "Save captures on this PC.";
-                            selected: root.local-only;
-                            clicked => { root.wizard-provider = -1; root.wizard-auto-upload = false; root.error = ""; }
-                        }
-                        ChoiceCard {
-                            horizontal-stretch: 1;
-                            min-width: 0px;
-                            preferred-width: 0px;
-                            title: "Custom server";
-                            subtitle: "Use your own upload endpoint.";
-                            selected: root.wizard-provider == 0;
-                            clicked => { root.wizard-provider = 0; root.wizard-auto-upload = true; root.error = ""; }
+                    destinations := ProviderPicker {
+                        selected-provider <=> root.wizard-provider;
+                        provider-limits: root.provider-limits;
+                        show-local: true;
+                        chosen(index) => {
+                            root.wizard-auto-upload = index != -1;
+                            root.error = "";
                         }
                     }
-
-                    VerticalLayout {
-                        spacing: 8px;
-
-                        Text { text: "No account needed"; color: Theme.text-soft; font-size: 13px; font-weight: 600; }
-                        HorizontalLayout {
-                            spacing: 8px;
-
-                            ChoiceCard {
-                                horizontal-stretch: 1;
-                                min-width: 0px;
-                                preferred-width: 0px;
-                                height: 108px;
-                                subtitle-min-height: 56px;
-                                title: "Uguu";
-                                subtitle: root.provider-limits[1];
-                                selected: root.wizard-provider == 1;
-                                clicked => { root.wizard-provider = 1; root.wizard-auto-upload = true; root.error = ""; }
-                            }
-                            ChoiceCard {
-                                horizontal-stretch: 1;
-                                min-width: 0px;
-                                preferred-width: 0px;
-                                height: 108px;
-                                subtitle-min-height: 56px;
-                                title: "Catbox";
-                                subtitle: root.provider-limits[2];
-                                selected: root.wizard-provider == 2;
-                                clicked => { root.wizard-provider = 2; root.wizard-auto-upload = true; root.error = ""; }
-                            }
-                            ChoiceCard {
-                                horizontal-stretch: 1;
-                                min-width: 0px;
-                                preferred-width: 0px;
-                                height: 108px;
-                                subtitle-min-height: 56px;
-                                title: "Litterbox";
-                                subtitle: root.provider-limits[3];
-                                selected: root.wizard-provider == 3;
-                                clicked => { root.wizard-provider = 3; root.wizard-auto-upload = true; root.error = ""; }
-                            }
-                        }
-                    }
-
-                    VerticalLayout {
-                        spacing: 8px;
-
-                        Text { text: "Account or API key"; color: Theme.text-muted; font-size: 12.5px; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            cross-axis-alignment: center;
-
-                            SelectableButton {
-                                text: "Imgur";
-                                selected: root.wizard-provider == 4;
-                                clicked => { root.wizard-provider = 4; root.wizard-auto-upload = true; root.error = ""; }
-                            }
-                            SelectableButton {
-                                text: "Pixeldrain";
-                                min-width: 100px;
-                                selected: root.wizard-provider == 5;
-                                clicked => { root.wizard-provider = 5; root.wizard-auto-upload = true; root.error = ""; }
-                            }
-                            SelectableButton {
-                                text: "s-ul";
-                                selected: root.wizard-provider == 6;
-                                clicked => { root.wizard-provider = 6; root.wizard-auto-upload = true; root.error = ""; }
-                            }
-                            Rectangle { horizontal-stretch: 1; background: transparent; }
-                        }
-                        if root.wizard-provider >= 4 && root.wizard-provider <= 6: Text {
-                            text: root.provider-limits[root.wizard-provider];
-                            color: Theme.text-muted;
-                            font-size: 12px;
-                            wrap: word-wrap;
+                    if root.wizard-provider >= 4 && root.wizard-provider <= 6: VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: root.wizard-provider == 4 ? "Imgur client ID" : root.wizard-provider == 5 ? "Pixeldrain API key" : "s-ul API key";
+                            color: Theme.text-soft;
+                            font-size: 12.5px;
                         }
                         if root.wizard-provider == 4: CompactField {
                             text <=> root.wizard-imgur-credential;
-                            placeholder-text: "Imgur client ID";
+                            placeholder-text: "Required";
                             input-type: InputType.password;
                             label: "Imgur client ID";
+                            edited => { root.error = ""; }
                         }
                         if root.wizard-provider == 5: CompactField {
                             text <=> root.wizard-pixeldrain-credential;
-                            placeholder-text: "Pixeldrain API key";
+                            placeholder-text: "Required";
                             input-type: InputType.password;
                             label: "Pixeldrain API key";
+                            edited => { root.error = ""; }
                         }
                         if root.wizard-provider == 6: CompactField {
                             text <=> root.wizard-sul-credential;
-                            placeholder-text: "s-ul API key";
+                            placeholder-text: "Required";
                             input-type: InputType.password;
                             label: "s-ul API key";
+                            edited => { root.error = ""; }
                         }
-                    }
-                    if root.wizard-provider >= 7: Text {
-                        text: root.provider-limits[root.wizard-provider];
-                        color: Theme.accent;
-                        font-size: 12.5px;
-                        wrap: word-wrap;
                     }
                     if root.wizard-provider == 0: CompactField {
                         text <=> root.wizard-uploader-url;
@@ -271,7 +194,7 @@ export component OnboardingView inherits Rectangle {
                         wrap: word-wrap;
                     }
 
-                    Text {
+                    if !root.local-only: Text {
                         text: "Public links can be opened by anyone who has them. Do not upload private screenshots to a public host.";
                         color: Theme.accent;
                         font-size: 12.5px;
@@ -281,15 +204,20 @@ export component OnboardingView inherits Rectangle {
                 }
             }
 
-            if root.step == 1: ScrollView {
+            if root.step == 1: AppScrollView {
+                init => { review-heading.focus(); }
                 vertical-stretch: 1;
                 min-height: 0px;
 
                 VerticalLayout {
-                    padding-right: 6px;
                     spacing: root.compact ? 8px : 14px;
 
-                    Text { text: "Review your choices"; color: Theme.text; font-size: root.compact ? 18px : 21px; font-weight: 600; }
+                    review-heading := FocusScope {
+                        height: heading-text.preferred-height;
+                        focus-on-click: false;
+                        focus-on-tab-navigation: false;
+                        heading-text := Text { text: "Review your choices"; color: Theme.text; font-size: root.compact ? 18px : 21px; font-weight: 600; }
+                    }
                     Text { text: root.resetting ? "Finish to reset other preferences and apply these choices. Cancel keeps all saved settings." : "Finish to save these choices. You can change them later in Settings."; color: Theme.text-soft; font-size: 13px; wrap: word-wrap; }
 
                     if root.compact: Text {
@@ -299,7 +227,7 @@ export component OnboardingView inherits Rectangle {
                         wrap: word-wrap;
                     }
 
-                    ToggleRow {
+                    review-upload := ToggleRow {
                         title: "Upload new captures automatically";
                         description: root.local-only ? "Off because captures stay on this PC." : "Captures leave this PC and get a public link as soon as they are taken.";
                         enabled: !root.local-only;
@@ -307,31 +235,27 @@ export component OnboardingView inherits Rectangle {
                     }
 
                     if !root.compact: Rectangle {
+                        height: summary-content.preferred-height;
                         border-radius: 9px;
                         border-width: 1px;
                         border-color: Theme.border;
                         background: Theme.surface-raised;
 
-                        VerticalLayout {
+                        summary-content := VerticalLayout {
                             padding: 14px;
                             spacing: 8px;
 
-                            HorizontalLayout {
-                                Text { width: 130px; text: "Destination"; color: Theme.text-muted; font-size: 12.5px; }
-                                Text { horizontal-stretch: 1; text: root.destination-name; color: Theme.text; font-size: 13px; font-weight: 600; }
-                            }
-                            HorizontalLayout {
-                                Text { width: 130px; text: "Automatic upload"; color: Theme.text-muted; font-size: 12.5px; }
-                                Text { horizontal-stretch: 1; text: root.local-only ? "Off" : (root.wizard-auto-upload ? "On" : "Off"); color: Theme.text; font-size: 13px; font-weight: 600; }
-                            }
-                            HorizontalLayout {
-                                Text { width: 130px; text: "Local copies"; color: Theme.text-muted; font-size: 12.5px; }
-                                Text { horizontal-stretch: 1; min-width: 0px; text: root.local-copies; color: Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; }
-                            }
+                            Text { text: "Destination"; color: Theme.text-muted; font-size: 12px; }
+                            Text { text: root.destination-name; color: Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; }
+                            Text { text: "Automatic upload"; color: Theme.text-muted; font-size: 12px; }
+                            Text { text: root.local-only ? "Off" : (root.wizard-auto-upload ? "On" : "Off"); color: Theme.text; font-size: 13px; font-weight: 600; }
+                            Text { text: "Local copies"; color: Theme.text-muted; font-size: 12px; }
+                            Text { text: root.local-copies; color: Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; height: self.preferred-height; }
+
                         }
                     }
 
-                    ToggleRow {
+                    review-sound := ToggleRow {
                         title: "Play a sound after a successful upload";
                         description: "No sound for local saves or failed uploads. Independent of copying the link.";
                         checked <=> root.wizard-sound;
