@@ -168,8 +168,12 @@ impl UploadTarget {
     ///
     /// # Errors
     ///
-    /// Returns an error when the selected provider configuration is incomplete or malformed.
+    /// Returns an error when the selected provider is unavailable, incomplete, or malformed.
     pub fn validate(&self) -> Result<()> {
+        if let Some(message) = self.kind.retirement_message() {
+            anyhow::bail!(message);
+        }
+
         if self.kind == UploaderKind::Custom {
             validate_uploader_url(&self.custom_url)?;
             validate_upload_header(&self.header_name, &self.header_value)?;
@@ -663,7 +667,7 @@ impl UploadClient {
         Self::for_target_with_timeouts(target, route, DEFAULT_UPLOAD_TIMEOUTS)
     }
 
-    /// Upload a payload with the requested deletion lifetime.
+    /// Upload a payload with the requested deletion lifetime, or zero for server retention.
     ///
     /// # Errors
     ///
@@ -724,11 +728,9 @@ impl UploadClient {
             return Err(UploadCancelled.into());
         }
 
-        anyhow::ensure!(
-            !self.target.kind.images_only() || payload.mime.starts_with("image/"),
-            "{} only accepts images",
-            self.target.kind.name()
-        );
+        self.target
+            .kind
+            .validate_payload(&payload.mime, payload.len())?;
         let filename = payload.filename.clone();
         let size_bytes = payload.len();
         let url = self.target.kind.endpoint(&self.target, lifetime_seconds)?;
@@ -1015,10 +1017,20 @@ fn endpoint_with_lifetime(endpoint: &Url, lifetime_seconds: u32) -> Url {
         .map(|(name, value)| (name.into_owned(), value.into_owned()))
         .collect::<Vec<_>>();
 
-    url.query_pairs_mut()
-        .clear()
-        .extend_pairs(retained_pairs)
-        .append_pair("time", &lifetime_seconds.to_string());
+    // Remove all saved lifetime parameters even when no expiry is requested.
+    // A bare `time=0` may have a different meaning to a custom server.
+    url.set_query(None);
+
+    if !retained_pairs.is_empty() || lifetime_seconds != 0 {
+        let mut query = url.query_pairs_mut();
+
+        query.extend_pairs(retained_pairs);
+
+        if lifetime_seconds != 0 {
+            query.append_pair("time", &lifetime_seconds.to_string());
+        }
+    }
+
     url
 }
 
@@ -1032,6 +1044,7 @@ pub struct UploadReceipt {
     pub link: String,
     #[serde(rename = "deleteLink")]
     pub delete_url: String,
+    #[serde(default)]
     pub expires_at: String,
 }
 

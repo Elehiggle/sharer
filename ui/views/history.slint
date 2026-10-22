@@ -388,6 +388,7 @@ export component HistoryView inherits Rectangle {
                     VerticalLayout {
                         padding: 12px;
                         alignment: center;
+                        cross-axis-alignment: center;
                         spacing: 8px;
 
                         Text { text: "No captures yet"; color: Theme.text; font-size: 16px; font-weight: 600; horizontal-alignment: center; }
@@ -422,6 +423,7 @@ export component HistoryView inherits Rectangle {
                                 padding-top: 8px;
                                 padding-bottom: 8px;
                                 spacing: 10px;
+                                cross-axis-alignment: center;
 
                                 VerticalLayout {
                                     width: root.narrow ? 46% : 34%;
@@ -491,6 +493,7 @@ export component HistoryView inherits Rectangle {
                         padding-left: 14px;
                         padding-right: 14px;
                         spacing: 10px;
+                        cross-axis-alignment: center;
 
                         FlatButton { min-width: 88px; text: "Previous"; enabled: root.has-previous; clicked => { root.previous-page(); } }
                         Rectangle { horizontal-stretch: 1; background: transparent; }

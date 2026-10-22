@@ -29,6 +29,7 @@ pub struct AppConfig {
     /// Authorized destination; absent only in configurations predating endpoint binding.
     #[serde(default)]
     pub upload_header_endpoint: Option<String>,
+    /// Requested custom-uploader lifetime; zero leaves retention to the server.
     pub lifetime_seconds: u32,
     pub recording_fps: u32,
     pub recording_max_seconds: u32,
@@ -214,6 +215,7 @@ pub struct PrivacyConfig {
 #[serde(default)]
 pub struct ProviderCredentials {
     pub imgur: String,
+    pub pixeldrain: String,
     pub vgy: String,
     pub sul: String,
 }
@@ -224,9 +226,14 @@ impl ProviderCredentials {
     pub fn for_provider(&self, kind: UploaderKind) -> &str {
         match kind {
             UploaderKind::Imgur => &self.imgur,
+            UploaderKind::Pixeldrain => &self.pixeldrain,
             UploaderKind::Vgy => &self.vgy,
             UploaderKind::Sul => &self.sul,
-            UploaderKind::Custom | UploaderKind::Uguu | UploaderKind::TransferSh => "",
+            UploaderKind::Custom
+            | UploaderKind::Uguu
+            | UploaderKind::Catbox
+            | UploaderKind::Litterbox
+            | UploaderKind::TransferSh => "",
         }
     }
 
@@ -234,9 +241,14 @@ impl ProviderCredentials {
     pub fn set_for_provider(&mut self, kind: UploaderKind, credential: String) {
         match kind {
             UploaderKind::Imgur => self.imgur = credential,
+            UploaderKind::Pixeldrain => self.pixeldrain = credential,
             UploaderKind::Vgy => self.vgy = credential,
             UploaderKind::Sul => self.sul = credential,
-            UploaderKind::Custom | UploaderKind::Uguu | UploaderKind::TransferSh => {}
+            UploaderKind::Custom
+            | UploaderKind::Uguu
+            | UploaderKind::Catbox
+            | UploaderKind::Litterbox
+            | UploaderKind::TransferSh => {}
         }
     }
 }
@@ -246,6 +258,7 @@ impl fmt::Debug for ProviderCredentials {
         formatter
             .debug_struct("ProviderCredentials")
             .field("imgur_configured", &!self.imgur.is_empty())
+            .field("pixeldrain_configured", &!self.pixeldrain.is_empty())
             .field("vgy_configured", &!self.vgy.is_empty())
             .field("sul_configured", &!self.sul.is_empty())
             .finish()
@@ -499,9 +512,13 @@ impl fmt::Debug for AppConfig {
     }
 }
 
-/// Human-readable bounded lifetime for status text.
+/// Human-readable requested lifetime for status text.
 #[must_use]
 pub fn display_lifetime(seconds: u32) -> String {
+    if seconds == 0 {
+        return "No expiry requested".to_owned();
+    }
+
     if seconds.is_multiple_of(3_600) {
         return match seconds / 3_600 {
             1 => "1 hour".to_owned(),
@@ -527,6 +544,7 @@ mod tests {
         let config = AppConfig {
             uploader_credentials: ProviderCredentials {
                 imgur: "imgur-secret".to_owned(),
+                pixeldrain: "pixeldrain-secret".to_owned(),
                 vgy: "vgy-secret".to_owned(),
                 sul: "sul-secret".to_owned(),
             },
@@ -536,6 +554,12 @@ mod tests {
         assert_eq!(
             config.upload_target_for(UploaderKind::Imgur).credential,
             "imgur-secret"
+        );
+        assert_eq!(
+            config
+                .upload_target_for(UploaderKind::Pixeldrain)
+                .credential,
+            "pixeldrain-secret"
         );
         assert_eq!(
             config.upload_target_for(UploaderKind::Vgy).credential,
@@ -691,6 +715,7 @@ mod tests {
 
     #[test]
     fn lifetimes_use_hours_and_days_in_status_text() {
+        assert_eq!(display_lifetime(0), "No expiry requested");
         assert_eq!(display_lifetime(3_600), "1 hour");
         assert_eq!(display_lifetime(7_200), "2 hours");
         assert_eq!(display_lifetime(86_400), "1 day");

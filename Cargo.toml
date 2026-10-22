@@ -43,6 +43,7 @@ desktop = [
 [dependencies]
 anyhow = "1"
 arboard = "3.6.1"
+base64 = "0.22"
 cap-std = "4.0.3"
 chrono = "0.4"
 clap = { version = "4.6", features = ["derive"] }

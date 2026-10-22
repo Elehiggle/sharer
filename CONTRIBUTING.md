@@ -57,6 +57,14 @@ cargo bench --bench memory                   # check allocation boundaries
 rulewright --strict                          # repository rules
 ```
 
+For memory-constrained machines and WSL, use the existing CI profile and one compiler job when running the desktop suite:
+
+```bash
+cargo test --profile ci --jobs 1 --config profile.ci.package.sharer.opt-level=0 --features desktop --lib --bins --tests
+```
+
+The CI profile disables debug symbols and incremental compilation; the override also disables ShareR's development optimization. A job limit reduces concurrent compiler work but is not a memory cap; use an OS or container memory limit when sharing RAM with other applications.
+
 Run `cargo fmt` before committing. The full gate used for a final check is listed under [Before you open a PR](#before-you-open-a-pr).
 
 ## Where things live

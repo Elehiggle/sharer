@@ -155,7 +155,9 @@ export component SettingsView inherits Rectangle {
     in-out property <int> uploader-kind;
     in-out property <string> uploader-url;
     in-out property <string> imgur-credential;
-    in-out property <string> vgy-credential;
+    in-out property <string> pixeldrain-credential;
+    in property <[string]> provider-names;
+    in property <[string]> provider-limits;
     in-out property <string> sul-credential;
     in-out property <string> upload-header-name;
     in-out property <string> upload-header-value;
@@ -228,6 +230,7 @@ export component SettingsView inherits Rectangle {
             HorizontalLayout {
                 height: 40px;
                 spacing: 10px;
+                cross-axis-alignment: center;
 
                 PageHeading { text: "Settings"; }
                 if !root.narrow && !root.settings-dirty: PageSubtitle { text: "Changes apply when you save."; }
@@ -644,26 +647,34 @@ export component SettingsView inherits Rectangle {
                             SettingGroup {
                                 label: "Upload provider";
                                 description: "Where new uploads go. Links are public.";
-                                help: "Uguu, transfer.sh, vgy.me, Imgur and s-ul are public services. Custom sends the file to your own endpoint.";
+                                help: "Uguu, Catbox and Litterbox need no account. Imgur, Pixeldrain and s-ul need a client ID or API key. Custom sends files to your own server.";
                                 HorizontalLayout {
                                     spacing: 10px;
+                                    cross-axis-alignment: center;
 
                                     CompactSelect {
                                         control-enabled: !root.busy;
                                         width: 220px;
                                         label: "Upload provider";
-                                        model: ["Custom", "Imgur", "vgy.me", "Uguu", "transfer.sh", "s-ul"];
+                                        placeholder-text: "Choose a new provider";
+                                        model: root.provider-names;
                                         current-index <=> root.uploader-kind;
                                     }
                                     Badge {
-                                        text: root.configured ? "Configured" : "Needs setup";
+                                        text: root.uploader-kind >= 7 ? "Unavailable" : (root.configured ? "Configured" : "Needs setup");
                                         tone: root.configured ? 2 : 3;
                                     }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
                                 }
+                                if root.uploader-kind != 0: Text {
+                                    text: (root.uploader-kind >= 7 ? root.uploader-name + ": " : "") + root.provider-limits[root.uploader-kind];
+                                    color: root.uploader-kind >= 7 ? Theme.accent : Theme.text-muted;
+                                    font-size: 12.5px;
+                                    wrap: word-wrap;
+                                }
                             }
-                            if root.uploader-kind == 1: Rectangle { height: 1px; background: Theme.border; }
-                            if root.uploader-kind == 1: SettingRow {
+                            if root.uploader-kind == 4: Rectangle { height: 1px; background: Theme.border; }
+                            if root.uploader-kind == 4: SettingRow {
                                 label: "Imgur client ID";
                                 description: "Free from your Imgur application settings.";
                                 CompactField {
@@ -674,20 +685,20 @@ export component SettingsView inherits Rectangle {
                                     label: "Imgur client ID";
                                 }
                             }
-                            if root.uploader-kind == 2: Rectangle { height: 1px; background: Theme.border; }
-                            if root.uploader-kind == 2: SettingRow {
-                                label: "vgy.me user key";
-                                description: "Optional. Links uploads to your account.";
-                                CompactField {
-                                    field-enabled: !root.busy;
-                                    text <=> root.vgy-credential;
-                                    placeholder-text: "Optional";
-                                    input-type: InputType.password;
-                                    label: "vgy.me user key";
-                                }
-                            }
                             if root.uploader-kind == 5: Rectangle { height: 1px; background: Theme.border; }
                             if root.uploader-kind == 5: SettingRow {
+                                label: "Pixeldrain API key";
+                                description: "From your Pixeldrain account settings.";
+                                CompactField {
+                                    field-enabled: !root.busy;
+                                    text <=> root.pixeldrain-credential;
+                                    placeholder-text: "Required";
+                                    input-type: InputType.password;
+                                    label: "Pixeldrain API key";
+                                }
+                            }
+                            if root.uploader-kind == 6: Rectangle { height: 1px; background: Theme.border; }
+                            if root.uploader-kind == 6: SettingRow {
                                 label: "s-ul API key";
                                 description: "Required by s-ul.";
                                 CompactField {
@@ -740,10 +751,12 @@ export component SettingsView inherits Rectangle {
                             if root.uploader-kind == 0: Rectangle { height: 1px; background: Theme.border; }
                             if root.uploader-kind == 0: SettingGroup {
                                 label: "Delete upload after";
-                                description: "Asks the host to remove the file after this time.";
+                                description: "Optional. No expiry leaves retention to the server.";
+                                help: "No expiry omits the deletion request. Your server may still impose a retention limit; this does not guarantee permanent storage.";
                                 HorizontalLayout {
                                     spacing: 6px;
 
+                                    SelectableButton { text: "No expiry"; min-width: 86px; enabled: !root.busy; selected: root.lifetime-seconds == 0; clicked => { root.lifetime-seconds = 0; } }
                                     SelectableButton { text: "1 hour"; enabled: !root.busy; selected: root.lifetime-seconds == 3600; clicked => { root.lifetime-seconds = 3600; } }
                                     SelectableButton { text: "1 day"; enabled: !root.busy; selected: root.lifetime-seconds == 86400; clicked => { root.lifetime-seconds = 86400; } }
                                     SelectableButton { text: "1 week"; enabled: !root.busy; selected: root.lifetime-seconds == 604800; clicked => { root.lifetime-seconds = 604800; } }
@@ -754,24 +767,19 @@ export component SettingsView inherits Rectangle {
                                     NumberStepper {
                                         enabled: !root.busy;
                                         width: 120px;
-                                        label: "Custom expiry in seconds";
+                                        label: "Custom expiry in seconds; zero requests no expiry";
                                         value <=> root.lifetime-seconds;
-                                        minimum: 1;
+                                        minimum: 0;
                                         maximum: 604800;
                                         step-size: 1;
                                     }
-                                    Text { text: "seconds"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
+                                    Text { text: root.lifetime-seconds == 0 ? "No expiry requested" : "seconds"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
                                 }
                             }
-                            if root.uploader-kind != 0 && root.uploader-kind != 1 && root.uploader-kind != 2 && root.uploader-kind != 5: SettingRow {
-                                label: "Retention";
-                                description: "The host controls retention. ShareR cannot extend it.";
-                                Text { text: "Managed by " + root.uploader-name; color: Theme.text-soft; font-size: 13px; }
-                            }
                         }
                         Text {
-                            text: "Uguu and other managed hosts control retention themselves. The expiry value only applies to a custom server.";
+                            text: "Public services set their own retention limits. The optional expiry request applies only to a custom server.";
                             color: Theme.text-muted;
                             font-size: 12px;
                             wrap: word-wrap;

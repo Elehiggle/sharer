@@ -4,12 +4,12 @@ import { ChoiceCard, CompactField, FlatButton, IconBox, SelectableButton, Toggle
 
 export component OnboardingView inherits Rectangle {
     in-out property <int> step: 0;
-    in-out property <int> wizard-provider: 3;
+    in-out property <int> wizard-provider: 1;
     in-out property <bool> wizard-auto-upload: true;
     in-out property <bool> wizard-sound: true;
     in-out property <bool> wizard-start-at-login: false;
     in-out property <string> wizard-imgur-credential;
-    in-out property <string> wizard-vgy-credential;
+    in-out property <string> wizard-pixeldrain-credential;
     in-out property <string> wizard-sul-credential;
     in-out property <string> wizard-uploader-url;
     in-out property <string> wizard-header-name;
@@ -20,6 +20,7 @@ export component OnboardingView inherits Rectangle {
     in property <bool> resetting: false;
     in property <bool> save-captures: true;
     in property <string> capture-directory;
+    in property <[string]> provider-limits;
 
     callback finish();
     callback skip();
@@ -29,7 +30,7 @@ export component OnboardingView inherits Rectangle {
 
     property <bool> compact: root.height < 560px;
     property <bool> local-only: root.wizard-provider == -1;
-    property <string> destination-name: root.wizard-provider == 3 ? "Uguu" : root.wizard-provider == 1 ? "Imgur" : root.wizard-provider == 2 ? "vgy.me" : root.wizard-provider == 4 ? "transfer.sh" : root.wizard-provider == 5 ? "s-ul" : root.wizard-provider == 0 ? "Custom endpoint" : "This PC";
+    property <string> destination-name: root.wizard-provider == 1 ? "Uguu" : root.wizard-provider == 2 ? "Catbox" : root.wizard-provider == 3 ? "Litterbox" : root.wizard-provider == 4 ? "Imgur" : root.wizard-provider == 5 ? "Pixeldrain" : root.wizard-provider == 6 ? "s-ul" : root.wizard-provider == 0 ? "Custom server" : "Local only";
     property <string> local-copies: (root.save-captures || root.local-only || !root.wizard-auto-upload) ? "On — " + (root.capture-directory == "" ? "Pictures/ShareR" : root.capture-directory) : "Off";
 
     background: #06090bf2;
@@ -38,7 +39,7 @@ export component OnboardingView inherits Rectangle {
 
     Rectangle {
         width: min(parent.width - 48px, 680px);
-        height: min(parent.height - 40px, 570px);
+        height: min(parent.height - 40px, 620px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         border-radius: 14px;
@@ -52,6 +53,7 @@ export component OnboardingView inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 12px;
+                cross-axis-alignment: center;
 
                 IconBox {
                     icon-source: @image-url("../../assets/sharer.png");
@@ -82,98 +84,128 @@ export component OnboardingView inherits Rectangle {
                     Text { text: "Where should uploads go?"; color: Theme.text; font-size: root.compact ? 18px : 21px; font-weight: 600; }
                     Text { text: root.resetting ? "Review reset defaults. Credentials, capture folder, history and files are kept. Nothing changes until you finish." : "Pick a destination. Nothing changes until you finish."; color: Theme.text-soft; font-size: 13px; wrap: word-wrap; }
 
-                    Rectangle {
-                        height: root.compact ? 292px : 328px;
+                    HorizontalLayout {
+                        spacing: 8px;
 
                         ChoiceCard {
-                            x: 0px;
-                            y: 0px;
-                            width: (parent.width - 8px) / 2;
-                            height: root.compact ? 66px : 76px;
-                            title: "Uguu";
-                            subtitle: "No account. Public, temporary links.";
-                            selected: root.wizard-provider == 3;
-                            clicked => { root.wizard-provider = 3; root.wizard-auto-upload = true; root.error = ""; }
-                        }
-                        ChoiceCard {
-                            x: (parent.width + 8px) / 2;
-                            y: 0px;
-                            width: (parent.width - 8px) / 2;
-                            height: root.compact ? 66px : 76px;
-                            title: "Imgur";
-                            subtitle: "Needs a free Imgur client ID.";
-                            selected: root.wizard-provider == 1;
-                            clicked => { root.wizard-provider = 1; root.wizard-auto-upload = true; root.error = ""; }
-                        }
-                        ChoiceCard {
-                            x: 0px;
-                            y: root.compact ? 74px : 84px;
-                            width: (parent.width - 8px) / 2;
-                            height: root.compact ? 66px : 76px;
-                            title: "Custom server";
-                            subtitle: "Your own upload endpoint.";
-                            selected: root.wizard-provider == 0;
-                            clicked => { root.wizard-provider = 0; root.wizard-auto-upload = true; root.error = ""; }
-                        }
-                        ChoiceCard {
-                            x: (parent.width + 8px) / 2;
-                            y: root.compact ? 74px : 84px;
-                            width: (parent.width - 8px) / 2;
-                            height: root.compact ? 66px : 76px;
-                            title: "Keep on this PC";
-                            subtitle: "Do not upload automatically.";
-                            selected: root.wizard-provider == -1;
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            preferred-width: 0px;
+                            title: "Local only";
+                            subtitle: "Save captures on this PC.";
+                            selected: root.local-only;
                             clicked => { root.wizard-provider = -1; root.wizard-auto-upload = false; root.error = ""; }
                         }
                         ChoiceCard {
-                            x: 0px;
-                            y: root.compact ? 148px : 168px;
-                            width: (parent.width - 8px) / 2;
-                            height: root.compact ? 66px : 76px;
-                            title: "vgy.me";
-                            subtitle: "Images. Optional user key.";
-                            selected: root.wizard-provider == 2;
-                            clicked => { root.wizard-provider = 2; root.wizard-auto-upload = true; root.error = ""; }
-                        }
-                        ChoiceCard {
-                            x: (parent.width + 8px) / 2;
-                            y: root.compact ? 148px : 168px;
-                            width: (parent.width - 8px) / 2;
-                            height: root.compact ? 66px : 76px;
-                            title: "transfer.sh";
-                            subtitle: "Files. No account required.";
-                            selected: root.wizard-provider == 4;
-                            clicked => { root.wizard-provider = 4; root.wizard-auto-upload = true; root.error = ""; }
-                        }
-                        ChoiceCard {
-                            x: 0px;
-                            y: root.compact ? 222px : 252px;
-                            width: (parent.width - 8px) / 2;
-                            height: root.compact ? 66px : 76px;
-                            title: "s-ul";
-                            subtitle: "Requires an API key.";
-                            selected: root.wizard-provider == 5;
-                            clicked => { root.wizard-provider = 5; root.wizard-auto-upload = true; root.error = ""; }
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            preferred-width: 0px;
+                            title: "Custom server";
+                            subtitle: "Use your own upload endpoint.";
+                            selected: root.wizard-provider == 0;
+                            clicked => { root.wizard-provider = 0; root.wizard-auto-upload = true; root.error = ""; }
                         }
                     }
 
-                    if root.wizard-provider == 1: CompactField {
-                        text <=> root.wizard-imgur-credential;
-                        placeholder-text: "Imgur client ID";
-                        input-type: InputType.password;
-                        label: "Imgur client ID";
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        Text { text: "No account needed"; color: Theme.text-soft; font-size: 13px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            ChoiceCard {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                preferred-width: 0px;
+                                height: 108px;
+                                subtitle-min-height: 56px;
+                                title: "Uguu";
+                                subtitle: root.provider-limits[1];
+                                selected: root.wizard-provider == 1;
+                                clicked => { root.wizard-provider = 1; root.wizard-auto-upload = true; root.error = ""; }
+                            }
+                            ChoiceCard {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                preferred-width: 0px;
+                                height: 108px;
+                                subtitle-min-height: 56px;
+                                title: "Catbox";
+                                subtitle: root.provider-limits[2];
+                                selected: root.wizard-provider == 2;
+                                clicked => { root.wizard-provider = 2; root.wizard-auto-upload = true; root.error = ""; }
+                            }
+                            ChoiceCard {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                preferred-width: 0px;
+                                height: 108px;
+                                subtitle-min-height: 56px;
+                                title: "Litterbox";
+                                subtitle: root.provider-limits[3];
+                                selected: root.wizard-provider == 3;
+                                clicked => { root.wizard-provider = 3; root.wizard-auto-upload = true; root.error = ""; }
+                            }
+                        }
                     }
-                    if root.wizard-provider == 2: CompactField {
-                        text <=> root.wizard-vgy-credential;
-                        placeholder-text: "Optional vgy.me user key";
-                        input-type: InputType.password;
-                        label: "vgy.me user key";
+
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        Text { text: "Account or API key"; color: Theme.text-muted; font-size: 12.5px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            cross-axis-alignment: center;
+
+                            SelectableButton {
+                                text: "Imgur";
+                                selected: root.wizard-provider == 4;
+                                clicked => { root.wizard-provider = 4; root.wizard-auto-upload = true; root.error = ""; }
+                            }
+                            SelectableButton {
+                                text: "Pixeldrain";
+                                min-width: 100px;
+                                selected: root.wizard-provider == 5;
+                                clicked => { root.wizard-provider = 5; root.wizard-auto-upload = true; root.error = ""; }
+                            }
+                            SelectableButton {
+                                text: "s-ul";
+                                selected: root.wizard-provider == 6;
+                                clicked => { root.wizard-provider = 6; root.wizard-auto-upload = true; root.error = ""; }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        if root.wizard-provider >= 4 && root.wizard-provider <= 6: Text {
+                            text: root.provider-limits[root.wizard-provider];
+                            color: Theme.text-muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        if root.wizard-provider == 4: CompactField {
+                            text <=> root.wizard-imgur-credential;
+                            placeholder-text: "Imgur client ID";
+                            input-type: InputType.password;
+                            label: "Imgur client ID";
+                        }
+                        if root.wizard-provider == 5: CompactField {
+                            text <=> root.wizard-pixeldrain-credential;
+                            placeholder-text: "Pixeldrain API key";
+                            input-type: InputType.password;
+                            label: "Pixeldrain API key";
+                        }
+                        if root.wizard-provider == 6: CompactField {
+                            text <=> root.wizard-sul-credential;
+                            placeholder-text: "s-ul API key";
+                            input-type: InputType.password;
+                            label: "s-ul API key";
+                        }
                     }
-                    if root.wizard-provider == 5: CompactField {
-                        text <=> root.wizard-sul-credential;
-                        placeholder-text: "s-ul API key";
-                        input-type: InputType.password;
-                        label: "s-ul API key";
+                    if root.wizard-provider >= 7: Text {
+                        text: root.provider-limits[root.wizard-provider];
+                        color: Theme.accent;
+                        font-size: 12.5px;
+                        wrap: word-wrap;
                     }
                     if root.wizard-provider == 0: CompactField {
                         text <=> root.wizard-uploader-url;
@@ -185,7 +217,8 @@ export component OnboardingView inherits Rectangle {
                         spacing: 8px;
 
                         Text {
-                            text: "Advanced (optional): one authentication header and link lifetime.";
+                            text: "Advanced (optional): authentication header and expiry.";
+                            wrap: word-wrap;
                             color: Theme.text-muted;
                             font-size: 12px;
                         }
@@ -208,26 +241,22 @@ export component OnboardingView inherits Rectangle {
                                 edited => { root.header-edited(); root.error = ""; }
                             }
                         }
+                        Text { text: "Delete upload after"; color: Theme.text-soft; font-size: 12.5px; }
                         HorizontalLayout {
                             spacing: 6px;
+                            cross-axis-alignment: center;
+                            SelectableButton { text: "No expiry"; min-width: 84px; selected: root.wizard-lifetime-seconds == 0; clicked => { root.wizard-lifetime-seconds = 0; } }
                             SelectableButton { text: "1 hour"; selected: root.wizard-lifetime-seconds == 3600; clicked => { root.wizard-lifetime-seconds = 3600; } }
                             SelectableButton { text: "1 day"; selected: root.wizard-lifetime-seconds == 86400; clicked => { root.wizard-lifetime-seconds = 86400; } }
                             SelectableButton { text: "1 week"; selected: root.wizard-lifetime-seconds == 604800; clicked => { root.wizard-lifetime-seconds = 604800; } }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                            Text { text: "lifetime"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
                         }
                         Text {
-                            text: "Current expiry: " + root.wizard-lifetime-seconds + " seconds";
+                            text: (root.wizard-lifetime-seconds == 0 ? "No expiry requested." : "Current expiry: " + root.wizard-lifetime-seconds + " seconds.") + " The host may still enforce its own retention limits.";
                             color: Theme.text-muted;
                             font-size: 12px;
                             wrap: word-wrap;
                         }
-                    }
-                    if root.wizard-provider == 3 && !root.compact: Text {
-                        text: "Uguu needs no account. Links are public and Uguu deletes files on its own schedule.";
-                        color: Theme.text-muted;
-                        font-size: 12.5px;
-                        wrap: word-wrap;
                     }
                     if root.wizard-provider == 0 && !root.compact: Text {
                         text: "The endpoint receives a multipart upload and returns a public link.";
@@ -272,7 +301,7 @@ export component OnboardingView inherits Rectangle {
 
                     ToggleRow {
                         title: "Upload new captures automatically";
-                        description: root.local-only ? "Off because uploads stay on this PC." : "Captures leave this PC and get a public link as soon as they are taken.";
+                        description: root.local-only ? "Off because captures stay on this PC." : "Captures leave this PC and get a public link as soon as they are taken.";
                         enabled: !root.local-only;
                         checked <=> root.wizard-auto-upload;
                     }
@@ -334,9 +363,10 @@ export component OnboardingView inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 10px;
+                cross-axis-alignment: center;
 
-                FlatButton {
-                    text: root.replay ? "Cancel" : "Use local only";
+                if root.replay: FlatButton {
+                    text: "Cancel";
                     clicked => { root.skip(); }
                 }
                 Rectangle { horizontal-stretch: 1; background: transparent; }

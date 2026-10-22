@@ -1418,7 +1418,7 @@ fn valid_window_lifetime(window: &AppWindow) -> Option<u32> {
         present_error(
             window,
             FailureStage::Settings,
-            "Lifetime must be a positive number of seconds",
+            "Lifetime must be zero (server default) or a positive number of seconds",
         );
 
         return None;
@@ -1450,7 +1450,14 @@ fn valid_window_upload_target(window: &AppWindow) -> Option<UploadTarget> {
 
 fn upload_status_detail(target: &UploadTarget, lifetime_seconds: u32) -> String {
     if target.kind.supports_lifetime() {
-        format!("Expires after {}", display_lifetime(lifetime_seconds))
+        if lifetime_seconds == 0 {
+            "No expiry requested; server retention applies".to_owned()
+        } else {
+            format!(
+                "Requested expiry after {}",
+                display_lifetime(lifetime_seconds)
+            )
+        }
     } else {
         format!("Retention managed by {}", target.kind.name())
     }

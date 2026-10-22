@@ -454,6 +454,7 @@ mod tests {
             uploader_kind: UploaderKind::Sul,
             uploader_credentials: ProviderCredentials {
                 imgur: "imgur-secret".to_owned(),
+                pixeldrain: "pixeldrain-secret".to_owned(),
                 vgy: "vgy-secret".to_owned(),
                 sul: "sul-secret".to_owned(),
             },

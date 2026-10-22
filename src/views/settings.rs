@@ -20,6 +20,18 @@ use sharer::{
 };
 
 pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
+    window.set_provider_names(slint::ModelRc::new(slint::VecModel::from(
+        UploaderKind::AVAILABLE
+            .iter()
+            .map(|kind| slint::SharedString::from(kind.name()))
+            .collect::<Vec<_>>(),
+    )));
+    window.set_provider_limits(slint::ModelRc::new(slint::VecModel::from(
+        (0..=8)
+            .filter_map(UploaderKind::from_index)
+            .map(|kind| slint::SharedString::from(kind.limits_description()))
+            .collect::<Vec<_>>(),
+    )));
     window.set_lifetime_seconds(config.lifetime_seconds.cast_signed());
     window.set_recording_fps(config.recording_fps.cast_signed());
     window.set_recording_max_seconds(config.recording_max_seconds.cast_signed());
@@ -38,6 +50,7 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     window.set_imgur_credential(config.uploader_credentials.imgur.clone().into());
     window.set_vgy_credential(config.uploader_credentials.vgy.clone().into());
     window.set_sul_credential(config.uploader_credentials.sul.clone().into());
+    window.set_pixeldrain_credential(config.uploader_credentials.pixeldrain.clone().into());
     window.set_upload_header_name(config.upload_header_name.clone().into());
     window.set_upload_header_value(config.upload_header_value.clone().into());
     window.set_upload_header_endpoint(
@@ -78,10 +91,14 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     } else {
         window.set_status_text("Ready".into());
         let retention = if config.uploader_kind.supports_lifetime() {
-            format!(
-                "Uploads expire after {}",
-                sharer::config::display_lifetime(config.lifetime_seconds)
-            )
+            if config.lifetime_seconds == 0 {
+                "No expiry requested; server retention applies".to_owned()
+            } else {
+                format!(
+                    "Requested expiry after {}",
+                    sharer::config::display_lifetime(config.lifetime_seconds)
+                )
+            }
         } else {
             format!("Retention managed by {}", config.uploader_kind.name())
         };
@@ -107,13 +124,17 @@ pub(crate) fn initialize_wizard(window: &AppWindow, config: &AppConfig, reset: b
     window.set_onboarding_reset(reset);
     window.set_onboarding_step(0);
     window.set_onboarding_error("".into());
-    window.set_wizard_provider(config.uploader_kind.index());
+    window.set_wizard_provider(if config.behavior.auto_upload_captures {
+        config.uploader_kind.index()
+    } else {
+        -1
+    });
     window.set_wizard_auto_upload(config.behavior.auto_upload_captures);
     window.set_wizard_sound(config.behavior.completion_sound);
     window.set_wizard_start_at_login(config.behavior.start_at_login);
     window.set_wizard_imgur_credential(config.uploader_credentials.imgur.clone().into());
-    window.set_wizard_vgy_credential(config.uploader_credentials.vgy.clone().into());
     window.set_wizard_sul_credential(config.uploader_credentials.sul.clone().into());
+    window.set_wizard_pixeldrain_credential(config.uploader_credentials.pixeldrain.clone().into());
     window.set_wizard_uploader_url(config.uploader_url.clone().into());
     window.set_wizard_header_name(config.upload_header_name.clone().into());
     window.set_wizard_header_value(config.upload_header_value.clone().into());
@@ -172,7 +193,7 @@ pub(crate) fn wizard_config_from_window(
                     .clone_into(&mut next.upload_header_value);
                 next.upload_header_endpoint = Some(window.get_wizard_header_endpoint().to_string());
                 next.lifetime_seconds = u32::try_from(window.get_wizard_lifetime_seconds())
-                    .context("link lifetime must be a positive number of seconds")?;
+                    .context("link lifetime must be zero or a positive number of seconds")?;
                 validate_lifetime(next.lifetime_seconds)?;
             }
 
@@ -183,11 +204,11 @@ pub(crate) fn wizard_config_from_window(
                     .clone_into(&mut next.uploader_credentials.imgur);
             }
 
-            UploaderKind::Vgy => {
+            UploaderKind::Pixeldrain => {
                 window
-                    .get_wizard_vgy_credential()
+                    .get_wizard_pixeldrain_credential()
                     .trim()
-                    .clone_into(&mut next.uploader_credentials.vgy);
+                    .clone_into(&mut next.uploader_credentials.pixeldrain);
             }
 
             UploaderKind::Sul => {
@@ -197,7 +218,11 @@ pub(crate) fn wizard_config_from_window(
                     .clone_into(&mut next.uploader_credentials.sul);
             }
 
-            UploaderKind::Uguu | UploaderKind::TransferSh => {}
+            UploaderKind::Uguu
+            | UploaderKind::Catbox
+            | UploaderKind::Litterbox
+            | UploaderKind::Vgy
+            | UploaderKind::TransferSh => {}
         }
     }
 
@@ -335,6 +360,7 @@ fn upload_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
         || window.get_imgur_credential().trim() != saved.uploader_credentials.imgur
         || window.get_vgy_credential().trim() != saved.uploader_credentials.vgy
         || window.get_sul_credential().trim() != saved.uploader_credentials.sul
+        || window.get_pixeldrain_credential().trim() != saved.uploader_credentials.pixeldrain
         || window.get_upload_header_name().trim() != saved.upload_header_name
         || window.get_upload_header_value().as_str() != saved.upload_header_value
         || window.get_upload_header_endpoint().as_str()
@@ -375,7 +401,7 @@ fn general_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
 
 pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
     let lifetime_seconds = u32::try_from(window.get_lifetime_seconds())
-        .context("link lifetime must be a positive number of seconds")?;
+        .context("link lifetime must be zero or a positive number of seconds")?;
 
     validate_lifetime(lifetime_seconds)?;
     let uploader = upload_target_values_from_window(window)?;
@@ -417,6 +443,7 @@ pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
             imgur: window.get_imgur_credential().trim().to_owned(),
             vgy: window.get_vgy_credential().trim().to_owned(),
             sul: window.get_sul_credential().trim().to_owned(),
+            pixeldrain: window.get_pixeldrain_credential().trim().to_owned(),
         },
         upload_header_name: uploader.header_name,
         upload_header_value: uploader.header_value,
@@ -466,7 +493,12 @@ fn upload_target_values_from_window(window: &AppWindow) -> Result<UploadTarget> 
             UploaderKind::Imgur => window.get_imgur_credential(),
             UploaderKind::Vgy => window.get_vgy_credential(),
             UploaderKind::Sul => window.get_sul_credential(),
-            UploaderKind::Custom | UploaderKind::Uguu | UploaderKind::TransferSh => "".into(),
+            UploaderKind::Pixeldrain => window.get_pixeldrain_credential(),
+            UploaderKind::Custom
+            | UploaderKind::Uguu
+            | UploaderKind::Catbox
+            | UploaderKind::Litterbox
+            | UploaderKind::TransferSh => "".into(),
         }
         .trim()
         .to_owned(),

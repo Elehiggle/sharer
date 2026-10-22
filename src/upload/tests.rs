@@ -73,6 +73,25 @@ fn small_payload() -> UploadPayload {
     )
 }
 
+#[test]
+fn retired_providers_report_the_removal_reason_before_credentials_or_network_setup() {
+    for kind in [UploaderKind::Vgy, UploaderKind::TransferSh] {
+        let target = UploadTarget {
+            kind,
+            ..UploadTarget::default()
+        };
+        let expected = kind.retirement_message().unwrap();
+
+        assert_eq!(target.validate().unwrap_err().to_string(), expected);
+        assert_eq!(
+            UploadClient::for_target(&target, &UploadRoute::Direct)
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
+    }
+}
+
 fn read_upload_request(mut stream: impl Read) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -310,12 +329,70 @@ fn lifetime_is_appended_as_seconds() {
 
 #[test]
 fn configured_lifetime_is_replaced() {
-    let endpoint = Url::parse("https://uploads.example/upload?time=12&token=public").unwrap();
+    let endpoint =
+        Url::parse("https://uploads.example/upload?time=12&token=public&time=300").unwrap();
     let url = endpoint_with_lifetime(&endpoint, 60);
 
     assert_eq!(
         url.as_str(),
         "https://uploads.example/upload?token=public&time=60"
+    );
+}
+
+#[test]
+fn no_requested_expiry_removes_saved_lifetimes_and_preserves_other_parameters() {
+    let endpoint =
+        Url::parse("https://uploads.example/upload?time=12&token=public&time=300").unwrap();
+
+    assert_eq!(
+        endpoint_with_lifetime(&endpoint, 0).as_str(),
+        "https://uploads.example/upload?token=public"
+    );
+
+    for endpoint in [
+        "https://uploads.example/upload",
+        "https://uploads.example/upload?time=12",
+    ] {
+        assert_eq!(
+            endpoint_with_lifetime(&Url::parse(endpoint).unwrap(), 0).as_str(),
+            "https://uploads.example/upload"
+        );
+    }
+}
+
+#[test]
+fn uploads_without_requested_expiry_accept_server_managed_retention() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!(
+        "http://{}/upload?time=60&source=desktop",
+        listener.local_addr().unwrap()
+    );
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let request = read_upload_request(&mut stream);
+        let body = r#"{"data":{"originalName":"sample.bin","size":3,"link":"https://files.example/sample.bin","deleteLink":""}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+
+        stream.write_all(response.as_bytes()).unwrap();
+        request
+    });
+    let client = UploadClient::new(&endpoint, &UploadRoute::Direct, None).unwrap();
+    let receipt = client.upload(small_payload(), 0).unwrap();
+
+    assert_eq!(receipt.link, "https://files.example/sample.bin");
+    assert_eq!(receipt.expires_at, "managed by Custom");
+    assert!(
+        server
+            .join()
+            .unwrap()
+            .starts_with("POST /upload?source=desktop HTTP/1.1\r\n")
     );
 }
 

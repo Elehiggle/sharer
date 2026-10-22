@@ -6009,6 +6009,7 @@ dependencies = [
  "anyhow",
  "apple-metal",
  "arboard",
+ "base64",
  "cap-std",
  "chrono",
  "clap",

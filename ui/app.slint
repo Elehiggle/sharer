@@ -28,6 +28,9 @@ export component AppWindow inherits Window {
     in-out property <string> imgur-credential: "";
     in-out property <string> vgy-credential: "";
     in-out property <string> sul-credential: "";
+    in-out property <string> pixeldrain-credential: "";
+    in property <[string]> provider-names;
+    in property <[string]> provider-limits;
     in-out property <string> upload-header-name: "";
     in-out property <string> upload-header-value: "";
     in-out property <string> upload-header-endpoint: "";
@@ -92,12 +95,12 @@ export component AppWindow inherits Window {
     in-out property <bool> onboarding-reset: false;
     in-out property <int> onboarding-step: 0;
     in-out property <string> onboarding-error: "";
-    in-out property <int> wizard-provider: 3;
+    in-out property <int> wizard-provider: 1;
     in-out property <bool> wizard-auto-upload: true;
     in-out property <bool> wizard-sound: true;
     in-out property <bool> wizard-start-at-login: false;
     in-out property <string> wizard-imgur-credential: "";
-    in-out property <string> wizard-vgy-credential: "";
+    in-out property <string> wizard-pixeldrain-credential: "";
     in-out property <string> wizard-sul-credential: "";
     in-out property <string> wizard-uploader-url: "";
     in-out property <string> wizard-header-name: "";
@@ -107,7 +110,7 @@ export component AppWindow inherits Window {
     in-out property <bool> wizard-save-captures: true;
     in-out property <string> wizard-capture-directory: "";
 
-    property <bool> uploader-configured: root.uploader-kind == 0 ? root.uploader-url != "" : root.uploader-kind == 1 ? root.imgur-credential != "" : root.uploader-kind == 5 ? root.sul-credential != "" : true;
+    property <bool> uploader-configured: root.uploader-kind == 0 ? root.uploader-url != "" : root.uploader-kind == 4 ? root.imgur-credential != "" : root.uploader-kind == 5 ? root.pixeldrain-credential != "" : root.uploader-kind == 6 ? root.sul-credential != "" : root.uploader-kind >= 1 && root.uploader-kind <= 3;
     property <bool> status-is-error: root.status-text == "Upload failed"
             || root.status-text == "Upload cancelled"
             || root.status-text == "Upload timed out"
@@ -180,6 +183,7 @@ export component AppWindow inherits Window {
     changed imgur-credential => { root.settings-edited(); }
     changed vgy-credential => { root.settings-edited(); }
     changed sul-credential => { root.settings-edited(); }
+    changed pixeldrain-credential => { root.settings-edited(); }
     changed upload-header-name => { root.settings-edited(); }
     changed upload-header-value => { root.settings-edited(); }
     changed upload-header-endpoint => { root.settings-edited(); }
@@ -339,7 +343,9 @@ export component AppWindow inherits Window {
                         uploader-name: root.uploader-name;
                         uploader-url <=> root.uploader-url;
                         imgur-credential <=> root.imgur-credential;
-                        vgy-credential <=> root.vgy-credential;
+                        pixeldrain-credential <=> root.pixeldrain-credential;
+                        provider-names: root.provider-names;
+                        provider-limits: root.provider-limits;
                         sul-credential <=> root.sul-credential;
                         upload-header-name <=> root.upload-header-name;
                         upload-header-value <=> root.upload-header-value;
@@ -404,11 +410,12 @@ export component AppWindow inherits Window {
         height: parent.height;
         step <=> root.onboarding-step;
         wizard-provider <=> root.wizard-provider;
+        provider-limits: root.provider-limits;
         wizard-auto-upload <=> root.wizard-auto-upload;
         wizard-sound <=> root.wizard-sound;
         wizard-start-at-login <=> root.wizard-start-at-login;
         wizard-imgur-credential <=> root.wizard-imgur-credential;
-        wizard-vgy-credential <=> root.wizard-vgy-credential;
+        wizard-pixeldrain-credential <=> root.wizard-pixeldrain-credential;
         wizard-sul-credential <=> root.wizard-sul-credential;
         wizard-uploader-url <=> root.wizard-uploader-url;
         wizard-header-name <=> root.wizard-header-name;

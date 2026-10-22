@@ -101,11 +101,11 @@ The headless archive has no graphical dependencies.
 
 ## Set it up
 
-On first start, ShareR asks where uploads should go. Uguu is the default because it needs no account; links are public and Uguu deletes files on its own schedule. You can choose any other built-in provider, a custom endpoint, or **Keep on this PC**. Automatic uploads and the successful-upload sound start enabled. Existing saved preferences are preserved when upgrading.
+On first start, ShareR asks where uploads should go. Uguu is the default because it needs no account; links are public and Uguu deletes files on its own schedule. The first row offers **Local only** and **Custom server**, followed by public hosts with their size and retention limits. Automatic uploads and the successful-upload sound start enabled. Existing saved preferences are preserved when upgrading.
 
-Choose **Use local only** to finish setup without automatic uploads. Run setup again from **Settings → General → Run setup again**; cancelling a replay leaves your saved settings unchanged. Reset stages the default preferences until you finish setup, while keeping provider credentials, the capture folder, history, and local files. Save or discard pending settings edits before opening setup again.
+Choose **Local only**, then **Continue** and finish the review to save captures without automatic uploads. Run setup again from **Settings → General → Run setup again**; cancelling a replay leaves your saved settings unchanged. Reset stages the default preferences until you finish setup, while keeping provider credentials, the capture folder, history, and local files. Save or discard pending settings edits before opening setup again.
 
-Imgur needs a client ID, s-ul needs an API key, and vgy.me accepts an optional user key. Uguu and transfer.sh work without credentials. The Custom provider accepts your own endpoint and one optional request header. The exact request and response format is documented in [Custom uploaders](docs/custom-uploaders.md).
+Uguu, Catbox and Litterbox work without an account or key. The smaller **Account or API key** section offers Imgur (client ID), Pixeldrain and s-ul (API key). Imgur uploads are anonymous to the host, but obtaining a client ID requires registration. The public transfer.sh service is unavailable; vgy.me was removed from the selection because its API could not be verified. Saved legacy destinations and credentials remain intact, but uploads require choosing another provider explicitly. See [Provider limits and research](docs/upload-providers.md) for current limits, sources and verification details. The Custom provider accepts your own endpoint and one optional request header. The exact request and response format is documented in [Custom uploaders](docs/custom-uploaders.md).
 
 Generated captures are saved locally by default under your Pictures directory in `ShareR/YYYY-MM`. Change the root folder or output behavior under **Settings → Capture**.
 
@@ -125,7 +125,7 @@ Generated captures are saved locally by default under your Pictures directory in
 
 On macOS, the startup switch checks the LaunchAgent file. A separate `launchd` disable override can still prevent login startup and is not reflected by the switch.
 
-**Link lifetime and retention.** The Custom provider accepts a lifetime from one second to one week, with hour/day/week presets. Existing durations keep their exact seconds when you edit other settings or replay setup. Built-in providers decide retention themselves; ShareR cannot extend it. History shows the expiry returned by the host, or indicates host-managed retention when no expiry is supplied.
+**Link lifetime and retention.** The Custom provider offers **No expiry**, or a lifetime from one second to one week with hour/day/week presets. No expiry omits the lifetime request (CLI: `--time 0`); the server may still impose its own retention policy. Existing durations keep their exact seconds when you edit other settings or replay setup. Built-in providers decide retention themselves; ShareR cannot extend it. History shows the expiry returned by the host, or indicates host-managed retention when no expiry is supplied.
 
 **History actions.** History records when each new capture was created and defaults to newest first; switch to oldest first from the page header. Right-click an entry, or use its action buttons, to open or copy its local file and path, reveal it in the system file manager, use its remote URLs, or remove it from history. The delete menu can open the host's deletion page, copy the deletion link, delete the local copy, or remove the history record only. Opening a deletion page asks for confirmation because the upload may be removed immediately.
 

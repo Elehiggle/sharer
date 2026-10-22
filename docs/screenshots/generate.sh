@@ -59,7 +59,7 @@ sqlite3 "$database" <<'SQL'
 UPDATE settings
 SET value = CAST(json_set(
     CAST(value AS TEXT),
-    '$.capture_directory', 'Pictures/ShareR',
+    '$.capture_directory', '/home/example/Pictures/ShareR',
     '$.auto_upload_captures', json('true'),
     '$.completion_sound', json('true'),
     '$.copy_link_after_upload', json('true'),

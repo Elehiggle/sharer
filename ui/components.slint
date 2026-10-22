@@ -19,6 +19,7 @@ export component IconBox inherits Rectangle {
     in property <length> box-width: 18px;
 
     width: root.box-width;
+    min-height: root.icon-size;
     background: transparent;
     Icon {
         source: root.icon-source;
@@ -496,8 +497,8 @@ export component Switch inherits Rectangle {
         width: 16px;
         height: 16px;
         border-radius: 8px;
-        y: 2px;
-        x: root.checked ? parent.width - self.width - 2px : 2px;
+        y: (parent.height - self.height) / 2;
+        x: root.checked ? parent.width - self.width - self.y : self.y;
         background: root.checked ? Theme.bg : Theme.text-soft;
         animate x { duration: 120ms; }
     }
@@ -632,6 +633,7 @@ export component ToggleRow inherits Rectangle {
         padding-top: 7px;
         padding-bottom: 7px;
         spacing: 20px;
+        cross-axis-alignment: center;
 
         VerticalLayout {
             horizontal-stretch: 1;
@@ -712,6 +714,7 @@ export component CompactSelect inherits Rectangle {
     in property <bool> control-enabled: true;
     in property <string> label: "";
     in property <string> hint: "";
+    in property <string> placeholder-text: "";
     property <bool> hovered: select-touch.has-hover;
 
     height: 32px;
@@ -729,7 +732,7 @@ export component CompactSelect inherits Rectangle {
     accessible-enabled: root.control-enabled;
     accessible-expandable: true;
     accessible-expanded: choices.is-open;
-    accessible-value: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
+    accessible-value: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : root.placeholder-text;
     accessible-action-expand => { if (root.control-enabled) { choices.show(); } }
 
     HorizontalLayout {
@@ -739,7 +742,7 @@ export component CompactSelect inherits Rectangle {
 
         Text {
             horizontal-stretch: 1;
-            text: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
+            text: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : root.placeholder-text;
             color: Theme.text;
             font-size: 13px;
             font-weight: 500;
@@ -761,11 +764,11 @@ export component CompactSelect inherits Rectangle {
 
         key-pressed(event) => {
             if event.text == Key.DownArrow {
-                root.current-index = min(root.model.length - 1, root.current-index + 1);
+                root.current-index = clamp(root.current-index + 1, 0, max(0, root.model.length - 1));
                 return accept;
             }
             if event.text == Key.UpArrow {
-                root.current-index = max(0, root.current-index - 1);
+                root.current-index = clamp(root.current-index - 1, 0, max(0, root.model.length - 1));
                 return accept;
             }
             if event.text == Key.Home {
@@ -979,6 +982,7 @@ export component InlineNotice inherits Rectangle {
         padding-top: 8px;
         padding-bottom: 8px;
         spacing: 10px;
+        cross-axis-alignment: center;
 
         IconBox {
             icon-source: root.kind == 1 ? Icons.update : Icons.warning;
@@ -1015,6 +1019,7 @@ export component InlineNotice inherits Rectangle {
 export component ChoiceCard inherits Rectangle {
     in property <string> title;
     in property <string> subtitle: "";
+    in property <length> subtitle-min-height: 0px;
     in property <bool> selected: false;
     callback clicked;
     property <bool> hovered: choice-touch.has-hover;
@@ -1073,6 +1078,7 @@ export component ChoiceCard inherits Rectangle {
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
+                min-height: root.subtitle-min-height;
                 color: Theme.text-muted;
                 font-size: 12px;
                 wrap: word-wrap;
@@ -1128,13 +1134,13 @@ export component StatusBar inherits Rectangle {
         padding-left: 20px;
         padding-right: 20px;
         spacing: 9px;
+        cross-axis-alignment: center;
 
         Rectangle {
             width: 8px;
             height: 8px;
             border-radius: 4px;
             background: root.error ? Theme.danger : (root.busy ? Theme.accent : Theme.success);
-            y: (parent.height - self.height) / 2;
         }
         Text {
             text: root.text;

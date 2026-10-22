@@ -1348,6 +1348,7 @@ fn setup_replay_cancel_preserves_saved_settings_and_invalid_drafts_are_recoverab
         uploader_credentials: ProviderCredentials {
             imgur: "fake-imgur-id".to_owned(),
             vgy: "fake-vgy-key".to_owned(),
+            pixeldrain: "fake-pixeldrain-key".to_owned(),
             sul: "fake-sul-key".to_owned(),
         },
         capture_directory: directory.path().to_string_lossy().into_owned(),
@@ -1506,7 +1507,7 @@ fn exact_lifetimes_survive_gui_edits_setup_and_queued_uploads() {
 
     slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
 
-    for seconds in [1, 60, 90, 5_400, 604_800] {
+    for seconds in [0, 1, 60, 90, 5_400, 604_800] {
         let window = AppWindow::new().unwrap();
         let mut saved = AppConfig {
             uploader_kind: UploaderKind::Custom,
@@ -1570,6 +1571,7 @@ fn replay_supports_every_provider_and_local_only_keeps_connection_secrets() {
         uploader_credentials: ProviderCredentials {
             imgur: "fake-imgur-id".to_owned(),
             vgy: "fake-vgy-key".to_owned(),
+            pixeldrain: "fake-pixeldrain-key".to_owned(),
             sul: "fake-sul-key".to_owned(),
         },
         capture_directory: directory.path().to_string_lossy().into_owned(),
@@ -1579,8 +1581,10 @@ fn replay_supports_every_provider_and_local_only_keeps_connection_secrets() {
     saved.behavior.onboarding_complete = true;
     saved.behavior.save_captures = false;
 
-    for index in 0..=5 {
-        saved.uploader_kind = UploaderKind::from_index(index).unwrap();
+    for kind in UploaderKind::AVAILABLE {
+        let index = kind.index();
+
+        saved.uploader_kind = kind;
         settings::initialize_wizard(&window, &saved, false);
         assert_eq!(window.get_wizard_provider(), index);
         assert_eq!(
