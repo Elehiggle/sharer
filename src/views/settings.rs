@@ -9,8 +9,8 @@ use crate::AppWindow;
 use sharer::{
     config::{
         AppConfig, BehaviorConfig, CaptureNameMode, CaptureNamingConfig, CaptureResolution,
-        PrivacyConfig, ProviderCredentials, RecordingFormat, ResizeQuality, ShortcutConfig,
-        TrayClickAction,
+        PrivacyConfig, ProviderCredentials, RecordingFormat, ResizeQuality, SettingsMode,
+        ShortcutConfig, TrayClickAction,
     },
     storage::{
         capture_directory_needs_default, capture_directory_or_default, default_capture_directory,
@@ -21,6 +21,7 @@ use sharer::{
 };
 
 pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
+    window.set_advanced_settings(config.settings_mode == SettingsMode::Advanced);
     window.set_provider_names(slint::ModelRc::new(slint::VecModel::from(
         UploaderKind::AVAILABLE
             .iter()
@@ -81,6 +82,12 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     initialize_wizard(window, config, false);
     window.set_show_onboarding(!config.behavior.onboarding_complete);
 
+    initialize_status(window, config);
+    refresh_uploader_readiness(window);
+    window.set_settings_dirty(false);
+}
+
+fn initialize_status(window: &AppWindow, config: &AppConfig) {
     if !config.behavior.onboarding_complete {
         window.set_status_text("Welcome to ShareR".into());
         window.set_status_detail("Choose where uploads go. You can change this later.".into());
@@ -121,20 +128,20 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
             .into(),
         );
     }
-
-    window.set_settings_dirty(false);
 }
 
 pub(crate) fn initialize_wizard(window: &AppWindow, config: &AppConfig, reset: bool) {
+    let first_launch = !reset && !config.behavior.onboarding_complete;
+
     window.set_onboarding_reset(reset);
     window.set_onboarding_step(0);
     window.set_onboarding_error("".into());
-    window.set_wizard_provider(if config.behavior.auto_upload_captures {
+    window.set_wizard_provider(if !first_launch && config.behavior.auto_upload_captures {
         config.uploader_kind.index()
     } else {
         -1
     });
-    window.set_wizard_auto_upload(config.behavior.auto_upload_captures);
+    window.set_wizard_auto_upload(!first_launch && config.behavior.auto_upload_captures);
     window.set_wizard_sound(config.behavior.completion_sound);
     window.set_wizard_start_at_login(config.behavior.start_at_login);
     window.set_wizard_imgur_credential(config.uploader_credentials.imgur.clone().into());
@@ -152,7 +159,7 @@ pub(crate) fn initialize_wizard(window: &AppWindow, config: &AppConfig, reset: b
     );
     window.set_wizard_lifetime_seconds(config.lifetime_seconds.cast_signed());
     window.set_wizard_litterbox_retention(config.litterbox_retention.index());
-    window.set_wizard_save_captures(config.behavior.save_captures);
+    window.set_wizard_save_captures(first_launch || config.behavior.save_captures);
     window.set_wizard_capture_directory(config.capture_directory.clone().into());
 }
 
@@ -353,9 +360,37 @@ pub(crate) fn wire_dirty_callback(window: &AppWindow, saved_config: &Rc<RefCell<
 
     window.on_settings_edited(move || {
         if let Some(window) = window_weak.upgrade() {
-            window.set_settings_dirty(settings_are_dirty(&window, &saved_config.borrow()));
+            let dirty = settings_are_dirty(&window, &saved_config.borrow());
+
+            refresh_uploader_readiness(&window);
+            window.set_settings_dirty(dirty);
+            refresh_draft_status(&window, dirty);
         }
     });
+}
+
+fn refresh_uploader_readiness(window: &AppWindow) {
+    window.set_uploader_configured(upload_target_from_window(window).is_ok());
+}
+
+fn refresh_draft_status(window: &AppWindow, dirty: bool) {
+    const DRAFT_DETAIL: &str =
+        "Save or discard your changes before starting another capture or upload";
+    const SAVED_DETAIL: &str = "Settings match the saved configuration";
+
+    let status = window.get_status_text();
+    let detail = window.get_status_detail();
+    let clean_settings_status = (status == "Ready"
+        && (detail == "Settings saved" || detail == SAVED_DETAIL))
+        || (status == "Changes discarded" && detail == SAVED_DETAIL);
+
+    if dirty && clean_settings_status {
+        window.set_status_text("Unsaved settings".into());
+        window.set_status_detail(DRAFT_DETAIL.into());
+    } else if !dirty && status == "Unsaved settings" && detail == DRAFT_DETAIL {
+        window.set_status_text("Ready".into());
+        window.set_status_detail(SAVED_DETAIL.into());
+    }
 }
 
 fn settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
@@ -450,6 +485,11 @@ pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
         .context("invalid tray click action")?;
 
     Ok(AppConfig {
+        settings_mode: if window.get_advanced_settings() {
+            SettingsMode::Advanced
+        } else {
+            SettingsMode::Simple
+        },
         uploader_kind: uploader.kind,
         uploader_url: uploader.custom_url,
         uploader_credentials: ProviderCredentials {

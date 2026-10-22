@@ -6088,6 +6088,7 @@ dependencies = [
  "rodio",
  "roxmltree",
  "rusqlite",
+ "rustix 1.1.4",
  "rustls",
  "screencapturekit",
  "semver",

@@ -64,6 +64,7 @@ fn main() -> ExitCode {
     });
 
     prepare_windows_console(cli.is_headless());
+    let _clipboard_session = clipboard::ClipboardSession::new();
     let mut output = std::io::stdout().lock();
     let result = if cli.is_headless() {
         run_headless(&cli, &mut output)
