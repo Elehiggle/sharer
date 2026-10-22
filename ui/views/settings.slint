@@ -68,6 +68,7 @@ export component SettingsView inherits Rectangle {
     in-out property <int> lifetime-seconds;
     in-out property <int> recording-fps;
     in-out property <int> recording-max-seconds;
+    in-out property <bool> recording-mp4;
     in-out property <bool> save-captures;
     in-out property <bool> auto-upload-captures;
     in-out property <bool> force-sdr-captures;
@@ -206,11 +207,19 @@ export component SettingsView inherits Rectangle {
                     }
                     SectionHeading { text: "RECORDING"; }
                     SectionCard {
-                        height: 58px;
-                        HorizontalLayout {
-                            padding: 10px; spacing: 12px;
-                            FormRow { width: root.column-width; label: "Limit"; label-width: 76px; NumberStepper { width: 92px; value <=> root.recording-max-seconds; minimum: 1; maximum: 3600; } FieldLabel { text: "seconds"; } }
-                            FormRow { width: root.column-width; label: "Frame rate"; label-width: 76px; NumberStepper { width: 80px; value <=> root.recording-fps; minimum: 1; maximum: 60; } FieldLabel { text: "fps"; } }
+                        height: 108px;
+                        VerticalLayout {
+                            padding: 10px; spacing: 5px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormRow { width: root.column-width; label: "Limit"; label-width: 76px; NumberStepper { width: 92px; value <=> root.recording-max-seconds; minimum: 1; maximum: 3600; } FieldLabel { text: "seconds"; } }
+                                FormRow { width: root.column-width; label: "Frame rate"; label-width: 76px; NumberStepper { width: 80px; value <=> root.recording-fps; minimum: 1; maximum: 60; } FieldLabel { text: "fps"; } }
+                            }
+                            CheckBox {
+                                text: "Record as MP4 using FFmpeg"; checked <=> root.recording-mp4;
+                                Tooltip { text: @markdown("Create smaller H.264 video files without audio. ShareR finds FFmpeg automatically and offers to download it if missing. Leave off to record animated WebP."); }
+                            }
+                            CaptionText { text: root.recording-mp4 ? "MP4 · compressed video · automatic FFmpeg setup" : "WebP · animated image · no extra installation"; }
                         }
                     }
                     SectionHeading { text: "CAPTURE OUTPUT"; }

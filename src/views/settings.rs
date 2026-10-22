@@ -9,7 +9,8 @@ use crate::AppWindow;
 use sharer::{
     config::{
         AppConfig, BehaviorConfig, CaptureNameMode, CaptureNamingConfig, CaptureResolution,
-        PrivacyConfig, ProviderCredentials, ResizeQuality, ShortcutConfig, TrayClickAction,
+        PrivacyConfig, ProviderCredentials, RecordingFormat, ResizeQuality, ShortcutConfig,
+        TrayClickAction,
     },
     storage::{
         capture_directory_needs_default, capture_directory_or_default, default_capture_directory,
@@ -23,6 +24,7 @@ pub(crate) fn initialize(window: &AppWindow, config: &AppConfig) {
     window.set_lifetime_seconds(config.lifetime_seconds.cast_signed());
     window.set_recording_fps(config.recording_fps.cast_signed());
     window.set_recording_max_seconds(config.recording_max_seconds.cast_signed());
+    window.set_recording_mp4(config.recording_format == RecordingFormat::Mp4);
     window.set_save_captures(config.behavior.save_captures);
     window.set_auto_upload_captures(config.behavior.auto_upload_captures);
     window.set_force_sdr_captures(config.behavior.force_sdr_captures);
@@ -167,6 +169,7 @@ fn upload_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
 fn capture_settings_are_dirty(window: &AppWindow, saved: &AppConfig) -> bool {
     window.get_recording_fps() != saved.recording_fps.cast_signed()
         || window.get_recording_max_seconds() != saved.recording_max_seconds.cast_signed()
+        || recording_format(window) != saved.recording_format
         || window.get_save_captures() != saved.behavior.save_captures
         || window.get_auto_upload_captures() != saved.behavior.auto_upload_captures
         || window.get_force_sdr_captures() != saved.behavior.force_sdr_captures
@@ -244,6 +247,7 @@ pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
         lifetime_seconds,
         recording_fps: validated_recording_fps(window)?,
         recording_max_seconds: validated_recording_seconds(window)?,
+        recording_format: recording_format(window),
         capture_directory,
         capture_naming,
         shortcuts,
@@ -264,6 +268,14 @@ pub(crate) fn config_from_window(window: &AppWindow) -> Result<AppConfig> {
             remove_exif: window.get_remove_exif(),
         },
     })
+}
+
+pub(crate) fn recording_format(window: &AppWindow) -> RecordingFormat {
+    if window.get_recording_mp4() {
+        RecordingFormat::Mp4
+    } else {
+        RecordingFormat::Webp
+    }
 }
 
 pub(crate) fn upload_target_from_window(window: &AppWindow) -> Result<UploadTarget> {

@@ -30,7 +30,7 @@ thread_local! {
         MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
 }
 
-struct SoftwareTestPlatform;
+pub(super) struct SoftwareTestPlatform;
 
 impl Platform for SoftwareTestPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
@@ -594,6 +594,45 @@ fn repaint_sequence_invalidates_the_entire_software_surface() {
     }));
     assert_eq!(damaged_origin, Some(PhysicalPosition::new(0, 0)));
     assert_eq!(damaged_size, Some(size));
+}
+
+#[test]
+fn mp4_setting_round_trips_and_marks_settings_dirty() {
+    use crate::views::settings;
+    use sharer::config::{AppConfig, RecordingFormat};
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform)).ok();
+    let window = AppWindow::new().unwrap();
+    let config = AppConfig::default();
+
+    settings::initialize(&window, &config);
+    let saved_config = Rc::new(RefCell::new(config));
+
+    settings::wire_dirty_callback(&window, &saved_config);
+    assert!(!window.get_recording_mp4());
+    window.set_recording_mp4(true);
+    window.invoke_settings_edited();
+    assert!(window.get_settings_dirty());
+    window.set_recording_mp4(false);
+    window.invoke_settings_edited();
+    assert!(!window.get_settings_dirty());
+    window.set_recording_mp4(true);
+    let saved = settings::config_from_window(&window).unwrap();
+
+    assert_eq!(saved.recording_format, RecordingFormat::Mp4);
+    *saved_config.borrow_mut() = saved.clone();
+    settings::initialize(&window, &saved);
+    assert!(window.get_recording_mp4());
+    assert!(!window.get_settings_dirty());
+    window.set_recording_mp4(false);
+    window.invoke_settings_edited();
+    assert!(window.get_settings_dirty());
+    assert_eq!(
+        settings::config_from_window(&window)
+            .unwrap()
+            .recording_format,
+        RecordingFormat::Webp
+    );
 }
 
 #[test]

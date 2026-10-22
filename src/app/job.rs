@@ -266,6 +266,7 @@ fn prepare_job_source(source: JobSource) -> Result<PreparedSource> {
             filename_stem,
             frames_per_second,
             max_seconds,
+            format,
             capture_resolution,
             save_directory,
         } => {
@@ -277,6 +278,7 @@ fn prepare_job_source(source: JobSource) -> Result<PreparedSource> {
                     frames_per_second,
                     max_seconds,
                     capture_resolution,
+                    format,
                 },
                 Instant::now,
             )?;

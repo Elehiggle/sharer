@@ -25,7 +25,7 @@ use crate::{AppWindow, RegionWindow, views};
 use sharer::upload::UploadPayload;
 use sharer::{
     capture,
-    config::{CaptureResolution, ResizeQuality},
+    config::{CaptureResolution, RecordingFormat, ResizeQuality},
     upload::UploadCancellation,
 };
 
@@ -42,6 +42,7 @@ struct RegionUpload {
     use_snapped_window_name: bool,
     recording_fps: u32,
     recording_max_seconds: u32,
+    recording_format: RecordingFormat,
     capture_resolution: CaptureResolution,
     resize_quality: ResizeQuality,
     save_directory: Option<PathBuf>,
@@ -308,6 +309,7 @@ fn begin_region_selection(
                     use_snapped_window_name,
                     recording_fps,
                     recording_max_seconds,
+                    recording_format: views::settings::recording_format(&window),
                     capture_resolution,
                     resize_quality: resize_quality(&window),
                     save_directory,
@@ -686,9 +688,9 @@ pub(super) fn toggle_recording(
         window.set_status_text("Encoding recording...".into());
         window.set_status_detail(
             if window.get_auto_upload_captures() {
-                "Finishing the animated WebP before upload"
+                "Finishing the recording before upload"
             } else {
-                "Finishing the animated WebP for local storage"
+                "Finishing the recording for local storage"
             }
             .into(),
         );
@@ -697,6 +699,14 @@ pub(super) fn toggle_recording(
     }
 
     if window.get_busy() {
+        return;
+    }
+
+    if views::settings::recording_format(window) == RecordingFormat::Mp4
+        && crate::recording::ffmpeg::find().is_none()
+    {
+        super::ffmpeg_setup::show_missing(window);
+
         return;
     }
 
@@ -816,6 +826,7 @@ fn start_region_recording(
                 filename_stem: upload.filename_stem.clone(),
                 frames_per_second: upload.recording_fps,
                 max_seconds: upload.recording_max_seconds,
+                format: upload.recording_format,
                 capture_resolution: upload.capture_resolution,
                 save_directory: upload.save_directory.clone(),
             },

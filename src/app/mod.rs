@@ -53,6 +53,7 @@ const CAPTURE_HIDE_DELAY: Duration = Duration::from_millis(100);
 type RecordingControl = Rc<RefCell<Option<Sender<()>>>>;
 type UiSlot = Rc<RefCell<Option<UiSession>>>;
 
+mod ffmpeg_setup;
 mod job;
 mod region;
 mod result;
@@ -102,6 +103,7 @@ enum JobSource {
         filename_stem: String,
         frames_per_second: u32,
         max_seconds: u32,
+        format: sharer::config::RecordingFormat,
         capture_resolution: CaptureResolution,
         save_directory: Option<PathBuf>,
     },
@@ -150,6 +152,7 @@ struct CallbackResources {
     recording_stop: RecordingControl,
     update_state: Rc<RefCell<Option<UpdateCheck>>>,
     upload_cancellation: Arc<UploadCancellation>,
+    require_proxy: bool,
 }
 
 struct UiSession {
@@ -353,9 +356,8 @@ pub fn run(options: DesktopOptions) -> Result<()> {
         recording_stop: Rc::clone(&recording_stop),
         update_state: Rc::clone(&update_state),
         upload_cancellation: Arc::clone(&upload_cancellation),
+        require_proxy: options.require_tor,
     };
-    let ui = Rc::new(RefCell::new(None));
-    let tray = Rc::new(RefCell::new(None));
     let polling_state = PollingState {
         activity,
         hotkeys,
@@ -363,8 +365,8 @@ pub fn run(options: DesktopOptions) -> Result<()> {
         result_rx,
         recording_stop,
         storage,
-        tray,
-        ui,
+        tray: Rc::new(RefCell::new(None)),
+        ui: Rc::new(RefCell::new(None)),
         update_rx,
         update_state,
         upload_progress,
@@ -804,6 +806,7 @@ fn wire_callbacks(
     close_requested: &Rc<Cell<bool>>,
 ) {
     views::settings::wire_folder_callbacks(window);
+    ffmpeg_setup::wire(window, resources.require_proxy);
 
     let sender = job_tx.clone();
     let window_weak = window.as_weak();

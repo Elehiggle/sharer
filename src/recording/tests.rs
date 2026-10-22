@@ -12,13 +12,14 @@ use super::{
     MAX_RECORDING_BYTES, RecordingCallbacks, RecordingSettings, duration_timestamp, encode_frame,
     record_frames, webp::WebpWriter,
 };
-use sharer::config::CaptureResolution;
+use sharer::config::{CaptureResolution, RecordingFormat};
 
 fn settings() -> RecordingSettings {
     RecordingSettings {
         frames_per_second: 60,
         max_seconds: 1,
         capture_resolution: CaptureResolution::Native,
+        format: RecordingFormat::Webp,
     }
 }
 

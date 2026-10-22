@@ -4,7 +4,7 @@ ShareR captures, records, and optionally uploads from one small desktop app. It 
 
 ## What you can do
 
-**Capture what matters.** Drag an exact region, snap to a window, grab a full display, or record a region directly to animated WebP.
+**Capture what matters.** Drag an exact region, snap to a window, grab a full display, or record a region to animated WebP or MP4.
 
 **Share almost anything.** Upload files, clipboard images, clipboard text, and copied files through the same workflow.
 
@@ -16,7 +16,13 @@ ShareR captures, records, and optionally uploads from one small desktop app. It 
 
 Low memory use is a core architecture constraint in ShareR. Files stream from disk, upload progress stays bounded, history loads in pages, and closing the window to the tray releases the desktop UI. Region selection prepares displays serially, keeps only bounded previews, and releases them after the click. The selected region is then recaptured at full configured quality, with temporary working buffers released as each processing stage completes. Generated captures and recordings move into the upload pipeline without copying their full buffers.
 
-Recordings encode one independent frame at a time into a temporary file and stream that file for saving or upload. Each RGBA frame is limited to 32 MiB (enough for 3840 × 2160); select a smaller region or logical resolution if the physical pixels exceed this limit. A recording stops at 256 MiB of actual encoded output, saves or uploads the completed frames, and reports the limit in its status details. These limits bound capture and codec input, retained recording data, and output size; native codec scratch memory still depends on the frame dimensions. Independent frames can produce larger files than delta-compressed animations, especially for mostly static screens.
+WebP recordings encode one independent frame at a time into a temporary file and stream that file for saving or upload. Each RGBA frame is limited to 32 MiB (enough for 3840 × 2160); select a smaller region or logical resolution if the physical pixels exceed this limit. A WebP recording stops at 256 MiB of actual encoded output, saves or uploads the completed frames, and reports the limit in its status details. These limits bound capture and codec input, retained recording data, and output size; native codec scratch memory still depends on the frame dimensions. Independent frames can produce larger files than delta-compressed animations, especially for mostly static screens.
+
+For smaller video files, enable **Settings → Capture → Recording → Record as MP4 using FFmpeg**. ShareR checks its managed FFmpeg folder, the folder beside ShareR, `PATH`, and common macOS/Linux installation locations. If FFmpeg is missing when you start recording, choose **Download** or **Cancel**. Download installs a verified FFmpeg copy in ShareR's per-user application data folder, without administrator access or changes to `PATH`. Downloads show progress, can be cancelled, and respect the proxy requirement. Turn off MP4 to return to WebP.
+
+Managed downloads use pinned FFmpeg 9.0.2 builds from gyan.dev (Windows x64) and ffmpeg.martin-riedl.de (macOS and Linux, x64/ARM64). ShareR streams the archive to disk, checks its SHA-256 checksum, extracts only the encoder, and verifies H.264 encoding before publishing the executable. Failed or cancelled downloads remove temporary files. Other platforms can use a manually installed FFmpeg with `libx264`.
+
+MP4 records H.264 video without audio using fixed compression settings. WebP remains the default and needs no additional installation. Both formats use the existing frame-rate, duration, save, and upload settings. MP4 uses a bounded frame queue, two encoder threads, no lookahead, and small MP4 fragments to keep memory independent of recording length. Slow encoding drops frames while preserving elapsed playback time. MP4 stops near the 256 MiB file limit, reserving space for finalization; oversized results are rejected. FFmpeg memory also depends on frame dimensions. Encoding failures appear in the capture status.
 
 > “A move from 64K to 640K felt like something that would last a great deal of time. Well, it didn't.”
 >

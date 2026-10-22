@@ -31,6 +31,7 @@ pub struct AppConfig {
     pub lifetime_seconds: u32,
     pub recording_fps: u32,
     pub recording_max_seconds: u32,
+    pub recording_format: RecordingFormat,
     pub capture_directory: String,
     pub capture_naming: CaptureNamingConfig,
     pub shortcuts: ShortcutConfig,
@@ -38,6 +39,15 @@ pub struct AppConfig {
     pub behavior: BehaviorConfig,
     #[serde(flatten)]
     pub privacy: PrivacyConfig,
+}
+
+/// Output format for region recordings.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingFormat {
+    #[default]
+    Webp,
+    Mp4,
 }
 
 /// Boolean desktop behavior kept together without changing the on-disk keys.
@@ -424,6 +434,7 @@ impl Default for AppConfig {
             lifetime_seconds: DEFAULT_LIFETIME_SECONDS,
             recording_fps: DEFAULT_RECORDING_FPS,
             recording_max_seconds: DEFAULT_RECORDING_SECONDS,
+            recording_format: RecordingFormat::default(),
             capture_directory: String::new(),
             capture_naming: CaptureNamingConfig::default(),
             shortcuts: ShortcutConfig::default(),
@@ -463,6 +474,7 @@ impl fmt::Debug for AppConfig {
             .field("lifetime_seconds", &self.lifetime_seconds)
             .field("recording_fps", &self.recording_fps)
             .field("recording_max_seconds", &self.recording_max_seconds)
+            .field("recording_format", &self.recording_format)
             .field("capture_directory", &self.capture_directory)
             .field("capture_naming", &self.capture_naming)
             .field("shortcuts", &self.shortcuts)
@@ -568,6 +580,7 @@ mod tests {
 
         assert!(config.behavior.save_captures);
         assert!(!config.behavior.auto_upload_captures);
+        assert_eq!(config.recording_format, RecordingFormat::Webp);
         assert!(config.shortcuts.clipboard.is_empty());
         assert_eq!(config.behavior.tray_click_action, TrayClickAction::Region);
         assert_eq!(config.capture_naming.mode, CaptureNameMode::ActiveWindow);
@@ -579,6 +592,22 @@ mod tests {
         assert_eq!(
             CaptureNameMode::from_index(3),
             Some(CaptureNameMode::Custom)
+        );
+    }
+
+    #[test]
+    fn existing_configs_keep_webp_and_mp4_is_persisted_as_an_opt_in() {
+        let mut config = serde_json::from_str::<AppConfig>("{}").unwrap();
+
+        assert_eq!(config.recording_format, RecordingFormat::Webp);
+        config.recording_format = RecordingFormat::Mp4;
+        let saved = serde_json::to_string(&config).unwrap();
+
+        assert_eq!(
+            serde_json::from_str::<AppConfig>(&saved)
+                .unwrap()
+                .recording_format,
+            RecordingFormat::Mp4
         );
     }
 

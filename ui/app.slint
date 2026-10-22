@@ -4,6 +4,7 @@ import { HistoryRow } from "models.slint";
 import { CaptureView } from "views/capture.slint";
 import { HistoryView } from "views/history.slint";
 import { SettingsView } from "views/settings.slint";
+import { FfmpegSetup } from "ffmpeg-setup.slint";
 import { RegionWindow } from "region.slint";
 
 export { HistoryRow, RegionWindow }
@@ -35,6 +36,11 @@ export component AppWindow inherits Window {
     in-out property <int> lifetime-seconds: 86400;
     in-out property <int> recording-fps: 30;
     in-out property <int> recording-max-seconds: 300;
+    in-out property <bool> recording-mp4: false;
+    in-out property <bool> ffmpeg-setup-visible: false;
+    in-out property <bool> ffmpeg-downloading: false;
+    in-out property <float> ffmpeg-download-progress: 0;
+    in-out property <string> ffmpeg-setup-message: "";
     in-out property <bool> save-captures: true;
     in-out property <bool> auto-upload-captures: false;
     in-out property <bool> force-sdr-captures: false;
@@ -86,6 +92,8 @@ export component AppWindow inherits Window {
     callback upload-clipboard();
     callback choose-file();
     callback cancel-upload();
+    callback download-ffmpeg();
+    callback cancel-ffmpeg-setup();
     callback choose-capture-folder();
     callback open-capture-folder();
     callback open-link();
@@ -131,6 +139,7 @@ export component AppWindow inherits Window {
     changed lifetime-seconds => { root.settings-edited(); }
     changed recording-fps => { root.settings-edited(); }
     changed recording-max-seconds => { root.settings-edited(); }
+    changed recording-mp4 => { root.settings-edited(); }
     changed save-captures => { root.settings-edited(); }
     changed auto-upload-captures => { root.settings-edited(); }
     changed force-sdr-captures => { root.settings-edited(); }
@@ -264,6 +273,7 @@ export component AppWindow inherits Window {
                 lifetime-seconds <=> root.lifetime-seconds;
                 recording-fps <=> root.recording-fps;
                 recording-max-seconds <=> root.recording-max-seconds;
+                recording-mp4 <=> root.recording-mp4;
                 save-captures <=> root.save-captures;
                 auto-upload-captures <=> root.auto-upload-captures;
                 force-sdr-captures <=> root.force-sdr-captures;
@@ -303,5 +313,14 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         background: Math.mod(root.repaint-sequence, 2) == 0 ? #00000000 : #ffffff00;
+    }
+    if root.ffmpeg-setup-visible: FfmpegSetup {
+        width: parent.width;
+        height: parent.height;
+        downloading: root.ffmpeg-downloading;
+        progress: root.ffmpeg-download-progress;
+        message: root.ffmpeg-setup-message;
+        download => { root.download-ffmpeg(); }
+        cancel => { root.cancel-ffmpeg-setup(); }
     }
 }
