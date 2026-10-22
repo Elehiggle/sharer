@@ -75,14 +75,14 @@ impl FrameMailbox {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (mut state, timed_out) = self
+        let (state, timed_out) = self
             .ready
             .wait_timeout_while(state, FRAME_TIMEOUT, |state| {
                 state.frame.is_none() && state.error.is_none()
             })
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        if let Some(error) = state.error.take() {
+        if let Some(error) = &state.error {
             anyhow::bail!("ScreenCaptureKit stream stopped: {error}");
         }
 
@@ -90,9 +90,12 @@ impl FrameMailbox {
             anyhow::bail!("timed out waiting for a ScreenCaptureKit frame");
         }
 
+        // Idle ScreenCaptureKit callbacks contain no image. Retain the latest
+        // complete sample so a static desktop remains recordable at the caller's
+        // frame cadence. Cloning only retains the native buffer, not its pixels.
         state
             .frame
-            .take()
+            .clone()
             .context("ScreenCaptureKit signalled without providing a frame")
     }
 }
@@ -547,4 +550,65 @@ fn sample_buffer_rgba(sample: CMSampleBuffer, width: u32, height: u32) -> Result
         "ScreenCaptureKit frame data is incomplete"
     );
     Ok(rgba)
+}
+
+#[cfg(test)]
+mod tests {
+    use screencapturekit::{
+        cm::{CMSampleBuffer, CMSampleBufferExt, CMTime},
+        cv::CVPixelBuffer,
+    };
+
+    use super::{FrameMailbox, scaled_dimension};
+
+    fn frame(width: usize) -> CMSampleBuffer {
+        let buffer = CVPixelBuffer::create(width, 1, u32::from_be_bytes(*b"BGRA")).unwrap();
+
+        CMSampleBuffer::create_for_image_buffer(&buffer, CMTime::ZERO, CMTime::new(1, 30)).unwrap()
+    }
+
+    #[test]
+    fn idle_recording_reuses_latest_native_sample_without_consuming_it() {
+        let mailbox = FrameMailbox::default();
+        let first = frame(1);
+        let first_pointer = first.as_ptr();
+
+        mailbox.replace_frame(first);
+        assert_eq!(mailbox.next_frame().unwrap().as_ptr(), first_pointer);
+        assert_eq!(mailbox.next_frame().unwrap().as_ptr(), first_pointer);
+
+        let replacement = frame(2);
+        let replacement_pointer = replacement.as_ptr();
+
+        mailbox.replace_frame(replacement);
+        assert_eq!(mailbox.next_frame().unwrap().as_ptr(), replacement_pointer);
+        assert_eq!(mailbox.next_frame().unwrap().as_ptr(), replacement_pointer);
+    }
+
+    #[test]
+    fn stopped_stream_error_takes_precedence_over_retained_frame() {
+        let mailbox = FrameMailbox::default();
+
+        mailbox.replace_frame(frame(1));
+        mailbox.set_error("permission revoked".to_owned());
+
+        for _ in 0..2 {
+            assert!(
+                mailbox
+                    .next_frame()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("permission revoked")
+            );
+        }
+    }
+
+    #[test]
+    fn retina_recording_dimensions_round_up_before_the_size_limit() {
+        assert_eq!(scaled_dimension(101, 3840, 1920).unwrap(), 202);
+        assert_eq!(scaled_dimension(101, 3840, 2560).unwrap(), 152);
+        assert!(scaled_dimension(1, 3840, 0).is_err());
+        assert!(scaled_dimension(0, 3840, 1920).is_err());
+        assert!(scaled_dimension(u32::MAX, 2, 1).is_err());
+    }
 }

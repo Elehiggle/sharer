@@ -1,47 +1,115 @@
-import { CheckBox, ScrollView } from "std-widgets.slint";
 import { Icons, Theme } from "../theme.slint";
-import { CaptionText, CompactField, CompactSelect, FieldLabel, FlatButton, FormRow, IconBox, NumberStepper, PageHeading, SectionCard, SectionHeading, SelectableButton } from "../components.slint";
+import { AppScrollView, Badge, CompactField, CompactSelect, FlatButton, InlineNotice, NumberStepper, PageHeading, PageSubtitle, SectionHeading, SelectableButton, SettingGroup, SettingRow, SettingsCard, ToggleRow } from "../components.slint";
+import { ProviderPicker } from "../provider-picker.slint";
 
-component SettingsPane inherits ScrollView {
+component SettingsPane inherits AppScrollView {
     VerticalLayout {
-        padding-right: 6px;
-        spacing: 7px;
+        padding-bottom: 24px;
+        spacing: 14px;
         alignment: start;
         @children
+    }
+}
+
+component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected: false;
+    callback clicked;
+    property <bool> hovered: tab-touch.has-hover;
+
+    height: 40px;
+    background: transparent;
+    border-width: tab-focus.has-focus ? 1px : 0px;
+    border-color: Theme.primary-bright;
+    border-radius: Theme.control-radius;
+    forward-focus: tab-focus;
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        alignment: center;
+
+        Text {
+            text: root.text;
+            color: root.selected ? Theme.text : (root.hovered ? Theme.text-soft : Theme.text-muted);
+            font-size: 13.5px;
+            font-weight: root.selected ? 600 : 500;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        width: parent.width;
+        background: root.selected ? Theme.primary : transparent;
+    }
+
+    tab-focus := FocusScope {
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
+
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    tab-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            tab-focus.focus();
+            root.clicked();
+        }
     }
 }
 
 component ShortcutField inherits Rectangle {
     in property <string> shortcut;
     in property <bool> recording: false;
+    in property <bool> enabled: true;
     callback record();
-    property <bool> hovered: touch.has-hover;
+    property <bool> hovered: shortcut-touch.has-hover;
 
     height: Theme.control-height;
     vertical-stretch: 0;
     border-radius: Theme.control-radius;
     border-width: 1px;
-    border-color: root.recording || focus.has-focus ? Theme.primary-bright : Theme.border;
+    border-color: root.recording || shortcut-focus.has-focus ? Theme.primary-bright : Theme.border;
     background: root.hovered ? Theme.surface-hover : Theme.surface-raised;
-    forward-focus: focus;
+    opacity: root.enabled ? 1 : 0.55;
+    forward-focus: shortcut-focus;
     accessible-role: button;
-    accessible-label: root.recording ? "Press the new shortcut" : (root.shortcut == "" ? "Shortcut disabled" : root.shortcut);
-    accessible-action-default => { root.record(); }
+    accessible-label: root.recording ? "Press the new shortcut" : (root.shortcut == "" ? "Shortcut disabled" : "Shortcut " + root.shortcut);
+    accessible-description: "Click to record a new shortcut. Backspace or Delete disables it; Escape cancels.";
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.record(); } }
 
     Text {
-        x: 9px;
-        width: parent.width - 18px;
+        x: 10px;
+        width: parent.width - 20px;
         text: root.recording ? "Press shortcut…" : (root.shortcut == "" ? "Disabled" : root.shortcut);
         color: root.recording ? Theme.primary-bright : (root.shortcut == "" ? Theme.text-muted : Theme.text);
-        font-size: 12px;
-        font-weight: root.recording ? 700 : 600;
+        font-size: 12.5px;
+        font-weight: root.recording ? 600 : 500;
         vertical-alignment: center;
         overflow: elide;
     }
 
-    focus := FocusScope {
-        width: 0px;
-        height: 0px;
+    shortcut-focus := FocusScope {
+        width: root.width;
+        height: root.height;
+        focus-on-click: false;
+        enabled: root.enabled;
+
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
                 root.record();
@@ -50,7 +118,41 @@ component ShortcutField inherits Rectangle {
             return reject;
         }
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.record(); } }
+
+    shortcut-touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            shortcut-focus.focus();
+            root.record();
+        }
+    }
+}
+
+component ShortcutCell inherits VerticalLayout {
+    in property <string> label;
+    in property <string> shortcut;
+    in property <bool> recording: false;
+    in property <bool> enabled: true;
+    callback record();
+
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    spacing: 5px;
+
+    Text {
+        text: root.label;
+        color: Theme.text-soft;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    ShortcutField {
+        shortcut: root.shortcut;
+        recording: root.recording;
+        enabled: root.enabled;
+        record => { root.record(); }
+    }
 }
 
 export component SettingsView inherits Rectangle {
@@ -59,51 +161,62 @@ export component SettingsView inherits Rectangle {
     in-out property <int> uploader-kind;
     in-out property <string> uploader-url;
     in-out property <string> imgur-credential;
-    in-out property <string> vgy-credential;
+    in-out property <string> pixeldrain-credential;
+    in property <[string]> provider-names;
+    in property <[string]> provider-limits;
     in-out property <string> sul-credential;
     in-out property <string> upload-header-name;
     in-out property <string> upload-header-value;
-    callback custom-endpoint-edited();
-    callback custom-header-edited();
-    in-out property <int> lifetime-seconds;
-    in-out property <int> recording-fps;
-    in-out property <int> recording-max-seconds;
-    in-out property <bool> save-captures;
-    in-out property <bool> auto-upload-captures;
-    in-out property <bool> force-sdr-captures;
-    in-out property <int> capture-resolution;
-    in-out property <int> resize-quality;
-    in property <bool> retina-scaling-available;
-    in-out property <bool> remove-exif;
-    in-out property <string> capture-directory;
-    in-out property <bool> minimize-to-tray;
-    in-out property <bool> start-at-login;
+    in-out property <int> lifetime-seconds: 86400;
+    in-out property <bool> save-captures: true;
+    in-out property <bool> auto-upload-captures: true;
+    in-out property <bool> force-sdr-captures: false;
+    in-out property <int> capture-resolution: 0;
+    in-out property <int> resize-quality: 0;
+    in property <bool> retina-scaling-available: false;
+    in-out property <bool> remove-exif: false;
+    in-out property <string> capture-directory: "";
+    in-out property <bool> minimize-to-tray: true;
+    in-out property <bool> start-at-login: false;
+    in-out property <bool> completion-sound: true;
+    in-out property <bool> copy-link-after-upload: true;
+    in-out property <int> recording-fps: 30;
+    in-out property <int> recording-max-seconds: 300;
+    in-out property <int> recording-max-gib: 2;
     in-out property <string> region-hotkey;
     in-out property <string> recording-hotkey;
     in-out property <string> screen-hotkey;
     in-out property <string> clipboard-hotkey;
-    in-out property <int> capture-name-mode;
+    in-out property <int> capture-name-mode: 0;
     in-out property <string> capture-custom-name;
-    in-out property <bool> require-tor;
-    in-out property <bool> completion-sound;
-    in-out property <int> tray-click-action;
+    in-out property <bool> require-tor: false;
+    in-out property <int> tray-click-action: 0;
+    in property <bool> configured: false;
+    in property <string> uploader-name: "Custom";
     in property <string> hotkey-status;
     in property <string> app-version;
     in property <string> update-status;
     in property <bool> update-available;
     in property <bool> settings-dirty;
+    in property <bool> onboarding-complete: true;
+    in property <bool> busy: false;
 
     in-out property <int> selected-section: 0;
     in-out property <int> shortcut-recording: 0;
-    property <length> label-width: 112px;
-    property <length> column-width: (root.width - 46px) / 2;
 
     callback choose-capture-folder();
     callback open-capture-folder();
     callback save-settings();
+    callback discard-settings();
     callback open-update();
     callback shortcut-recording-started();
     callback shortcut-recording-finished();
+    callback restart-onboarding();
+    callback reset-settings();
+    callback custom-endpoint-edited();
+    callback custom-header-edited();
+
+    property <bool> narrow: root.width < 620px;
 
     changed selected-section => {
         if root.selected-section != 1 && root.shortcut-recording != 0 {
@@ -112,225 +225,634 @@ export component SettingsView inherits Rectangle {
         }
     }
 
-    VerticalLayout {
-        spacing: 12px;
+    Rectangle {
+        width: min(parent.width, Theme.settings-max);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
 
-        HorizontalLayout {
-            height: 30px;
-            PageHeading { text: "Settings"; vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; background: transparent; }
-            FlatButton {
-                width: 104px;
-                text: "Save changes";
-                primary: true;
-                enabled: root.settings-dirty && root.shortcut-recording == 0;
-                clicked => { root.save-settings(); }
-            }
-        }
+        VerticalLayout {
+            spacing: 10px;
 
-        Rectangle {
-            height: 38px;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: Theme.border;
-            background: Theme.surface;
             HorizontalLayout {
-                padding: 3px;
-                spacing: 3px;
-                SelectableButton { horizontal-stretch: 1; height: 30px; outlined: false; text: "General"; selected: root.selected-section == 0; clicked => { root.selected-section = 0; } }
-                SelectableButton { horizontal-stretch: 1; height: 30px; outlined: false; text: "Capture"; selected: root.selected-section == 1; clicked => { root.selected-section = 1; } }
-                SelectableButton { horizontal-stretch: 1; height: 30px; outlined: false; text: "Upload"; selected: root.selected-section == 2; clicked => { root.selected-section = 2; } }
-                SelectableButton { horizontal-stretch: 1; height: 30px; outlined: false; text: "Privacy"; selected: root.selected-section == 3; clicked => { root.selected-section = 3; } }
-            }
-        }
+                height: 40px;
+                spacing: 10px;
+                cross-axis-alignment: center;
 
-        Rectangle {
-            vertical-stretch: 1;
-            min-height: 0px;
-            background: transparent;
-
-            if root.selected-section == 2: SettingsPane {
-                    SectionHeading { text: "UPLOADER"; }
-                    SectionCard {
-                        height: root.uploader-kind == 0 ? 174px : (root.uploader-kind == 1 || root.uploader-kind == 2 || root.uploader-kind == 5 ? 96px : 82px);
-                        VerticalLayout {
-                            padding: 10px;
-                            spacing: 6px;
-                            FormRow { label: "Provider"; label-width: root.label-width;
-                                CompactSelect { width: 184px; model: ["Custom", "Imgur", "vgy.me", "Uguu", "transfer.sh", "s-ul"]; current-index <=> root.uploader-kind; }
-                                Rectangle { horizontal-stretch: 1; background: transparent; }
-                            }
-                            if root.uploader-kind == 0: FormRow { label: "Endpoint"; label-width: root.label-width;
-                                CompactField { text <=> root.uploader-url; placeholder-text: "https://example.com/upload"; edited => { root.custom-endpoint-edited(); } }
-                            }
-                            if root.uploader-kind == 0: FormRow { label: "Request header"; label-width: root.label-width;
-                                CompactField { width: 176px; text <=> root.upload-header-name; placeholder-text: "Name (optional)"; edited => { root.custom-header-edited(); } }
-                                CompactField { text <=> root.upload-header-value; placeholder-text: "Value"; input-type: InputType.password; edited => { root.custom-header-edited(); } }
-                            }
-                            if root.uploader-kind == 1: FormRow { label: "Client ID"; label-width: root.label-width; CompactField { text <=> root.imgur-credential; placeholder-text: "Required"; input-type: InputType.password; } }
-                            if root.uploader-kind == 2: FormRow { label: "User key"; label-width: root.label-width; CompactField { text <=> root.vgy-credential; placeholder-text: "Optional"; input-type: InputType.password; } }
-                            if root.uploader-kind == 5: FormRow { label: "API key"; label-width: root.label-width; CompactField { text <=> root.sul-credential; placeholder-text: "Required"; input-type: InputType.password; } }
-                            if root.uploader-kind == 0: FormRow { label: "Link lifetime"; label-width: root.label-width; gap: 6px;
-                                SelectableButton { width: 54px; text: "1 hour"; selected: root.lifetime-seconds == 3600; clicked => { root.lifetime-seconds = 3600; } }
-                                SelectableButton { width: 54px; text: "1 day"; selected: root.lifetime-seconds == 86400; clicked => { root.lifetime-seconds = 86400; } }
-                                SelectableButton { width: 56px; text: "1 week"; selected: root.lifetime-seconds == 604800; clicked => { root.lifetime-seconds = 604800; } }
-                                Rectangle { horizontal-stretch: 1; background: transparent; }
-                                NumberStepper { width: 116px; value <=> root.lifetime-seconds; minimum: 1; maximum: 604800; }
-                                FieldLabel { width: 24px; text: "sec"; }
-                            }
-                            if root.uploader-kind != 0 && root.uploader-kind != 1 && root.uploader-kind != 2 && root.uploader-kind != 5: FormRow {
-                                height: 24px; label: "Retention"; label-width: root.label-width;
-                                CaptionText { text: "Managed by provider"; vertical-alignment: center; }
-                            }
-                        }
-                    }
+                PageHeading { text: "Settings"; }
+                if !root.narrow && !root.settings-dirty: PageSubtitle { text: "Changes apply when you save."; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                if root.settings-dirty && !root.narrow: Text {
+                    text: "Unsaved changes";
+                    color: Theme.accent;
+                    font-size: 12.5px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                }
+                if root.settings-dirty: FlatButton {
+                    text: "Discard";
+                    min-width: 84px;
+                    enabled: !root.busy;
+                    clicked => { root.discard-settings(); }
+                }
+                FlatButton {
+                    text: "Save changes";
+                    min-width: 112px;
+                    primary: true;
+                    enabled: root.settings-dirty && root.shortcut-recording == 0 && !root.busy;
+                    clicked => { root.save-settings(); }
+                }
             }
 
-            if root.selected-section == 1: SettingsPane {
-                    SectionHeading { text: "SCREENSHOTS"; }
-                    SectionCard {
-                        height: root.retina-scaling-available ? (root.capture-resolution == 1 ? 118px : 82px) : 46px;
-                        VerticalLayout {
-                            padding: 10px; spacing: 6px;
-                            if root.retina-scaling-available: FormRow { label: "Retina size"; label-width: root.label-width;
-                                CompactSelect { width: 176px; model: ["Native pixels", "Logical size"]; current-index <=> root.capture-resolution; }
-                            }
-                            if root.retina-scaling-available && root.capture-resolution == 1: FormRow { label: "Resize quality"; label-width: root.label-width;
-                                CompactSelect { width: 176px; model: ["Fast", "Balanced", "Sharp"]; current-index <=> root.resize-quality; }
-                            }
-                            CheckBox {
-                                text: "Force SDR PNG output"; checked <=> root.force-sdr-captures;
-                                Tooltip { text: @markdown("Always save screenshots as standard PNG files. Leave this off to preserve HDR color on compatible Windows displays."); }
-                            }
-                        }
-                    }
-                    SectionHeading { text: "RECORDING"; }
-                    SectionCard {
-                        height: 58px;
-                        HorizontalLayout {
-                            padding: 10px; spacing: 12px;
-                            FormRow { width: root.column-width; label: "Limit"; label-width: 76px; NumberStepper { width: 92px; value <=> root.recording-max-seconds; minimum: 1; maximum: 3600; } FieldLabel { text: "seconds"; } }
-                            FormRow { width: root.column-width; label: "Frame rate"; label-width: 76px; NumberStepper { width: 80px; value <=> root.recording-fps; minimum: 1; maximum: 60; } FieldLabel { text: "fps"; } }
-                        }
-                    }
-                    SectionHeading { text: "CAPTURE OUTPUT"; }
-                    SectionCard {
-                        height: 120px;
-                        VerticalLayout {
-                            padding: 9px; spacing: 5px;
-                            CheckBox {
-                                text: "Upload screenshots and recordings automatically"; checked <=> root.auto-upload-captures;
-                                Tooltip { text: @markdown("When disabled, captures stay on this computer and are not sent to the configured uploader."); }
-                            }
-                            CheckBox {
-                                text: "Save screenshots and recordings locally"; checked <=> root.save-captures;
-                                Tooltip { text: @markdown("Captures are grouped into year-month folders inside this directory."); }
-                            }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                CompactField { text <=> root.capture-directory; field-enabled: root.save-captures; placeholder-text: "Capture folder"; }
-                                FlatButton { width: 76px; text: "Browse"; icon-source: Icons.folder; has-icon: true; clicked => { root.choose-capture-folder(); } }
-                                FlatButton { width: 54px; text: "Open"; enabled: root.save-captures; clicked => { root.open-capture-folder(); } }
-                            }
-                        }
-                    }
-                    SectionHeading { text: "SHORTCUTS"; }
-                    SectionCard {
-                        height: root.width < 640px ? 180px : 108px;
-                        VerticalLayout {
-                            padding: 10px; spacing: 5px;
-                            if root.width >= 640px: HorizontalLayout {
-                                spacing: 12px;
-                                FormRow { width: root.column-width; gap: 8px; label: "Region"; label-width: 80px; ShortcutField { shortcut: root.region-hotkey; recording: root.shortcut-recording == 1; record => { root.shortcut-recording = 1; root.shortcut-recording-started(); } } }
-                                FormRow { width: root.column-width; gap: 8px; label: "Recording"; label-width: 80px; ShortcutField { shortcut: root.recording-hotkey; recording: root.shortcut-recording == 2; record => { root.shortcut-recording = 2; root.shortcut-recording-started(); } } }
-                            }
-                            if root.width >= 640px: HorizontalLayout {
-                                spacing: 12px;
-                                FormRow { width: root.column-width; gap: 8px; label: "Full screen"; label-width: 80px; ShortcutField { shortcut: root.screen-hotkey; recording: root.shortcut-recording == 3; record => { root.shortcut-recording = 3; root.shortcut-recording-started(); } } }
-                                FormRow { width: root.column-width; gap: 8px; label: "Clipboard"; label-width: 80px; ShortcutField { shortcut: root.clipboard-hotkey; recording: root.shortcut-recording == 4; record => { root.shortcut-recording = 4; root.shortcut-recording-started(); } } }
-                            }
-                            if root.width < 640px: FormRow { gap: 8px; label: "Region"; label-width: root.label-width; ShortcutField { shortcut: root.region-hotkey; recording: root.shortcut-recording == 1; record => { root.shortcut-recording = 1; root.shortcut-recording-started(); } } }
-                            if root.width < 640px: FormRow { gap: 8px; label: "Recording"; label-width: root.label-width; ShortcutField { shortcut: root.recording-hotkey; recording: root.shortcut-recording == 2; record => { root.shortcut-recording = 2; root.shortcut-recording-started(); } } }
-                            if root.width < 640px: FormRow { gap: 8px; label: "Full screen"; label-width: root.label-width; ShortcutField { shortcut: root.screen-hotkey; recording: root.shortcut-recording == 3; record => { root.shortcut-recording = 3; root.shortcut-recording-started(); } } }
-                            if root.width < 640px: FormRow { gap: 8px; label: "Clipboard"; label-width: root.label-width; ShortcutField { shortcut: root.clipboard-hotkey; recording: root.shortcut-recording == 4; record => { root.shortcut-recording = 4; root.shortcut-recording-started(); } } }
-                            CaptionText { text: root.shortcut-recording == 0 ? root.hotkey-status : "Press keys · Backspace/Delete disables · Esc cancels"; }
-                        }
-                    }
+            Rectangle {
+                height: 41px;
+                background: transparent;
+
+                HorizontalLayout {
+                    spacing: 14px;
+
+                    TabButton { text: "General"; selected: root.selected-section == 0; clicked => { root.selected-section = 0; } }
+                    TabButton { text: "Capture"; selected: root.selected-section == 1; clicked => { root.selected-section = 1; } }
+                    TabButton { text: "Upload"; selected: root.selected-section == 2; clicked => { root.selected-section = 2; } }
+                    TabButton { text: "Privacy"; selected: root.selected-section == 3; clicked => { root.selected-section = 3; } }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    width: parent.width;
+                    background: Theme.border;
+                }
             }
 
-            if root.selected-section == 3: SettingsPane {
-                    SectionHeading { text: "FILES AND IDENTITY"; }
-                    SectionCard {
-                        height: root.capture-name-mode == 3 ? 116px : 82px;
-                        VerticalLayout {
-                            padding: 10px; spacing: 5px;
-                            CheckBox { text: "Remove identifying image metadata"; checked <=> root.remove-exif;
-                                Tooltip { text: @markdown("**JPEG, PNG, and WebP**\n\nRemoves EXIF, ordinary XMP, and IPTC.\n\nRemoves comments and PNG text.\n\nPreserves color profiles and known HDR gain maps.\n\nUnsupported mixed HDR metadata blocks upload."); }
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 0px;
+                background: transparent;
+
+                if root.selected-section == 0: SettingsPane {
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "Startup and feedback"; }
+                        SettingsCard {
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Minimize to tray on close";
+                                description: "Keeps ShareR and its shortcuts running in the notification area.";
+                                help: "Use Quit in the tray menu to exit completely.";
+                                checked <=> root.minimize-to-tray;
                             }
                             Rectangle { height: 1px; background: Theme.border; }
-                            FormRow { label: "File name"; label-width: root.label-width;
-                                CompactSelect {
-                                    width: 216px;
-                                    model: ["Active window title", "Random ID (private)", "Adjective-animal-1234", "Custom base name"];
-                                    current-index <=> root.capture-name-mode;
-                                    Tooltip { text: @markdown("**Active window title** uses the focused app or window. **Random ID** is a private 128-bit identifier. **Adjective-animal-1234** creates a readable random name. **Custom base name** uses the text below."); }
-                                }
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Start ShareR when I sign in";
+                                description: "Runs hidden in the tray with shortcuts ready.";
+                                help: "Adds a per-user startup entry for this copy of ShareR with --background. It does not open a window at login. If you move the app, turn this off and on again.";
+                                checked <=> root.start-at-login;
                             }
-                            if root.capture-name-mode == 3: FormRow { label: "Custom name"; label-width: root.label-width;
-                                CompactField {
-                                    text <=> root.capture-custom-name;
-                                    placeholder-text: "e.g. project-screenshot";
-                                    Tooltip { text: @markdown("Enter the base filename. ShareR sanitizes characters, adds the file extension, and avoids overwriting an existing capture."); }
-                                }
+                            Rectangle { height: 1px; background: Theme.border; }
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Play a sound when an upload finishes";
+                                description: "A short chime. Independent of copying the link.";
+                                help: "Played after a successful upload, even when clipboard access is unavailable.";
+                                checked <=> root.completion-sound;
                             }
-                        }
-                    }
-                    SectionHeading { text: "NETWORK"; }
-                    SectionCard {
-                        height: 44px;
-                        VerticalLayout {
-                            padding: 10px;
-                            CheckBox { text: "Require proxy for uploads"; checked <=> root.require-tor;
-                                Tooltip { text: @markdown("Requires a local SOCKS5 proxy on **127.0.0.1:9050 or :9150**. Uploads fail when no proxy is available, without direct fallback.\n\nShareR does not verify Tor routing or anonymity. Use a proxy you trust."); }
+                            Rectangle { height: 1px; background: Theme.border; }
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Copy the link after upload";
+                                description: "Puts the public link on the clipboard.";
+                                checked <=> root.copy-link-after-upload;
                             }
                         }
                     }
-            }
 
-            if root.selected-section == 0: SettingsPane {
-                    SectionHeading { text: "APP"; }
-                    SectionCard {
-                        height: 126px;
-                        VerticalLayout {
-                            padding: 10px; spacing: 6px;
-                            HorizontalLayout {
-                                CheckBox { text: "Minimize to tray on close"; checked <=> root.minimize-to-tray; }
-                                CheckBox { text: "Start at login"; checked <=> root.start-at-login; }
-                            }
-                            CheckBox { text: "Play sound when link is copied"; checked <=> root.completion-sound; }
-                            FormRow { label: "Tray left click"; label-width: root.label-width;
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "Tray"; }
+                        SettingsCard {
+                            SettingRow {
+                                label: "Left click";
+                                description: "Runs after the double-click delay.";
+                                help: "Double click opens ShareR. Right click opens the tray menu.";
                                 CompactSelect {
-                                    width: 184px; model: ["Capture region", "Show ShareR", "Capture screen", "Record region", "Upload clipboard", "Do nothing"]; current-index <=> root.tray-click-action;
-                                    Tooltip { text: @markdown("Choose what a single left click on the tray icon does. Double click opens ShareR and right click opens the tray menu."); }
+                                    control-enabled: !root.busy;
+                                    label: "Tray left click";
+                                    model: ["Capture region", "Show ShareR", "Capture screen", "Record region", "Upload clipboard", "Do nothing"];
+                                    current-index <=> root.tray-click-action;
                                 }
                             }
                         }
                     }
-                    SectionHeading { text: "ABOUT"; }
-                    SectionCard {
-                        height: 64px;
-                        HorizontalLayout {
-                            padding: 10px; spacing: 9px;
-                            IconBox { icon-source: root.update-available ? Icons.update : Icons.success; tint: root.update-available ? Theme.primary-bright : Theme.success; icon-size: 17px; box-width: 18px; }
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "About"; }
+                        SettingsCard {
                             VerticalLayout {
-                                alignment: center; spacing: 2px;
-                                Text { text: "ShareR " + root.app-version; color: Theme.text; font-size: 13px; font-weight: 700; }
-                                CaptionText { text: root.update-status; Tooltip { text: @markdown("\{parent.text}"); } }
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 12px;
+                                padding-bottom: 12px;
+                                spacing: 10px;
+
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "ShareR " + root.app-version; color: Theme.text; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+                                    Text { horizontal-stretch: 1; text: root.update-status; color: Theme.text-muted; font-size: 12.5px; vertical-alignment: center; wrap: word-wrap; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    if root.update-available: FlatButton { text: "View update"; min-width: 104px; clicked => { root.open-update(); } }
+                                    FlatButton {
+                                        text: "Run setup again";
+                                        min-width: 132px;
+                                        enabled: !root.busy;
+                                        description: "Review your setup. Changes apply only when you finish; Cancel keeps your current settings. History and local captures are preserved.";
+                                        clicked => { root.restart-onboarding(); }
+                                    }
+                                    FlatButton {
+                                        text: "Reset…";
+                                        min-width: 76px;
+                                        danger: true;
+                                        enabled: !root.busy;
+                                        description: "Review default preferences in setup before applying them with Finish. Saved credentials, history and local captures are preserved.";
+                                        clicked => { root.reset-settings(); }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.selected-section == 1: SettingsPane {
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "After capture"; }
+                        SettingsCard {
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Upload new captures automatically";
+                                description: "Sends each capture to the provider. Link copying follows your General setting.";
+                                help: "Requires a working provider. Links are public. Uguu and similar hosts delete files on their own schedule.";
+                                checked <=> root.auto-upload-captures;
+                            }
+                            if root.auto-upload-captures && !root.configured: InlineNotice {
+                                text: "Automatic uploads need a provider";
+                                detail: "Captures still save locally without one.";
+                                action-text: "Upload settings";
+                                action => { root.selected-section = 2; }
+                            }
+                            Rectangle { height: 1px; background: Theme.border; }
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Keep a local copy";
+                                description: "Saves every capture to the folder below.";
+                                checked <=> root.save-captures;
+                            }
+                            Rectangle { height: 1px; background: Theme.border; }
+                            SettingGroup {
+                                label: "Capture folder";
+                                description: "Grouped into year-month folders.";
+                                CompactField {
+                                    text <=> root.capture-directory;
+                                    field-enabled: root.save-captures && !root.busy;
+                                    placeholder-text: "Choose a folder";
+                                    label: "Capture folder";
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    FlatButton { text: "Change"; icon-source: Icons.folder; has-icon: true; min-width: 92px; enabled: root.save-captures && !root.busy; clicked => { root.choose-capture-folder(); } }
+                                    FlatButton { text: "Open folder"; min-width: 104px; enabled: root.save-captures; clicked => { root.open-capture-folder(); } }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "Screenshots"; }
+                        SettingsCard {
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Always save screenshots in SDR";
+                                description: "Standard colour instead of HDR, so files look right in every app.";
+                                help: "HDR displays can produce very bright images that look wrong outside Windows. This forces a standard SDR PNG. Turn it off to keep HDR when the display and capture path support it.";
+                                checked <=> root.force-sdr-captures;
+                            }
+                            if root.retina-scaling-available: Rectangle { height: 1px; background: Theme.border; }
+                            if root.retina-scaling-available: SettingRow {
+                                label: "Retina size";
+                                description: "Native keeps every Mac pixel; Logical matches points.";
+                                CompactSelect {
+                                    control-enabled: !root.busy;
+                                    label: "Retina size";
+                                    model: ["Native pixels", "Logical size"];
+                                    current-index <=> root.capture-resolution;
+                                }
+                            }
+                            if root.retina-scaling-available && root.capture-resolution == 1: Rectangle { height: 1px; background: Theme.border; }
+                            if root.retina-scaling-available && root.capture-resolution == 1: SettingRow {
+                                label: "Resize quality";
+                                description: "Sharp keeps text crisp; Fast is quickest.";
+                                CompactSelect {
+                                    control-enabled: !root.busy;
+                                    label: "Resize quality";
+                                    model: ["Fast", "Balanced", "Sharp"];
+                                    current-index <=> root.resize-quality;
+                                }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "Recording"; }
+                        SettingsCard {
+                            SettingGroup {
+                                label: "Limits";
+                                description: "Stops at this length or the file size limit.";
+                                HorizontalLayout {
+                                    spacing: 24px;
+
+                                    VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
+                                        horizontal-stretch: 1;
+                                        spacing: 5px;
+                                        Text { text: "Length"; color: Theme.text-muted; font-size: 12px; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            NumberStepper {
+                                                enabled: !root.busy;
+                                                width: 120px;
+                                                label: "Maximum recording length in seconds";
+                                                value <=> root.recording-max-seconds;
+                                                minimum: 1;
+                                                maximum: 3600;
+                                                step-size: 1;
+                                            }
+                                            Text { text: "sec"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
+                                        horizontal-stretch: 1;
+                                        spacing: 5px;
+                                        Text { text: "Frame rate"; color: Theme.text-muted; font-size: 12px; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            NumberStepper {
+                                                enabled: !root.busy;
+                                                width: 120px;
+                                                label: "Recording frame rate";
+                                                value <=> root.recording-fps;
+                                                minimum: 1;
+                                                maximum: 60;
+                                                step-size: 1;
+                                            }
+                                            Text { text: "fps"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
+                                        }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { width: 120px; text: "Max file size"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
+                                    NumberStepper {
+                                        enabled: !root.busy;
+                                        width: 120px;
+                                        label: "Maximum recording file size in GiB";
+                                        value <=> root.recording-max-gib;
+                                        minimum: 1;
+                                        maximum: 3;
+                                        step-size: 1;
+                                    }
+                                    Text { text: "GiB"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                }
+                                Text {
+                                    text: "Recordings stream to disk. The 1–3 GiB limit bounds the file, not memory; animated WebP cannot exceed 4 GiB.";
+                                    color: Theme.text-muted;
+                                    font-size: 11.5px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "Shortcuts"; }
+                        SettingsCard {
+                            if !root.narrow: VerticalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 14px;
+                                padding-bottom: 14px;
+                                spacing: 12px;
+
+                                HorizontalLayout {
+                                    spacing: 14px;
+                                    ShortcutCell {
+                                        label: "Capture region";
+                                        shortcut: root.region-hotkey;
+                                        recording: root.shortcut-recording == 1;
+                                        enabled: !root.busy;
+                                        record => { root.shortcut-recording = 1; root.shortcut-recording-started(); }
+                                    }
+                                    ShortcutCell {
+                                        label: "Record region";
+                                        shortcut: root.recording-hotkey;
+                                        recording: root.shortcut-recording == 2;
+                                        record => { root.shortcut-recording = 2; root.shortcut-recording-started(); }
+                                        enabled: !root.busy;
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 14px;
+                                    ShortcutCell {
+                                        label: "Full screen";
+                                        shortcut: root.screen-hotkey;
+                                        recording: root.shortcut-recording == 3;
+                                        record => { root.shortcut-recording = 3; root.shortcut-recording-started(); }
+                                        enabled: !root.busy;
+                                    }
+                                    ShortcutCell {
+                                        label: "Upload clipboard";
+                                        shortcut: root.clipboard-hotkey;
+                                        recording: root.shortcut-recording == 4;
+                                        record => { root.shortcut-recording = 4; root.shortcut-recording-started(); }
+                                        enabled: !root.busy;
+                                    }
+                                }
+                                Text {
+                                    text: root.shortcut-recording == 0 ? root.hotkey-status : "Press keys · Backspace or Delete disables · Escape cancels";
+                                    color: Theme.text-muted;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            if root.narrow: VerticalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 14px;
+                                padding-bottom: 14px;
+                                spacing: 12px;
+
+                                ShortcutCell {
+                                    label: "Capture region";
+                                    shortcut: root.region-hotkey;
+                                    recording: root.shortcut-recording == 1;
+                                    enabled: !root.busy;
+                                    record => { root.shortcut-recording = 1; root.shortcut-recording-started(); }
+                                }
+                                ShortcutCell {
+                                    label: "Record region";
+                                    shortcut: root.recording-hotkey;
+                                    recording: root.shortcut-recording == 2;
+                                    enabled: !root.busy;
+                                    record => { root.shortcut-recording = 2; root.shortcut-recording-started(); }
+                                }
+                                ShortcutCell {
+                                    label: "Full screen";
+                                    shortcut: root.screen-hotkey;
+                                    recording: root.shortcut-recording == 3;
+                                    enabled: !root.busy;
+                                    record => { root.shortcut-recording = 3; root.shortcut-recording-started(); }
+                                }
+                                ShortcutCell {
+                                    label: "Upload clipboard";
+                                    shortcut: root.clipboard-hotkey;
+                                    recording: root.shortcut-recording == 4;
+                                    enabled: !root.busy;
+                                    record => { root.shortcut-recording = 4; root.shortcut-recording-started(); }
+                                }
+                                Text {
+                                    text: root.shortcut-recording == 0 ? root.hotkey-status : "Press keys · Backspace or Delete disables · Escape cancels";
+                                    color: Theme.text-muted;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.selected-section == 2: SettingsPane {
+                    VerticalLayout {
+                        spacing: 12px;
+
+                        SectionHeading { text: "Destination"; }
+                        Text {
+                            text: "Choose where uploads go. Automatic uploads are controlled in Capture.";
+                            color: Theme.text-muted;
+                            font-size: 12.5px;
+                            wrap: word-wrap;
+                        }
+                        ProviderPicker {
+                            compact: root.narrow;
+                            selected-provider <=> root.uploader-kind;
+                            provider-limits: root.provider-limits;
+                            enabled: !root.busy;
+                            show-local: false;
+                            chosen(index) => { root.uploader-kind = index; }
+                        }
+                        if root.uploader-kind == 0 || (root.uploader-kind >= 4 && root.uploader-kind <= 6): HorizontalLayout {
+                            spacing: 10px;
+                            cross-axis-alignment: center;
+                            SectionHeading { text: root.uploader-kind == 0 ? "Custom server settings" : root.provider-names[root.uploader-kind] + " connection"; }
+                            Badge {
+                                text: root.configured ? "Configured" : "Needs setup";
+                                tone: root.configured ? 2 : 3;
                             }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                            if root.update-available: FlatButton { width: 98px; text: "View update"; clicked => { root.open-update(); } }
+                        }
+                        if root.uploader-kind == 0 || (root.uploader-kind >= 4 && root.uploader-kind <= 6): SettingsCard {
+                            if root.uploader-kind == 4: SettingGroup {
+                                label: "Imgur client ID";
+                                description: "Free from your Imgur application settings.";
+                                CompactField {
+                                    field-enabled: !root.busy;
+                                    text <=> root.imgur-credential;
+                                    placeholder-text: "Required";
+                                    input-type: InputType.password;
+                                    label: "Imgur client ID";
+                                }
+                            }
+                            if root.uploader-kind == 5: SettingGroup {
+                                label: "Pixeldrain API key";
+                                description: "From your Pixeldrain account settings.";
+                                CompactField {
+                                    field-enabled: !root.busy;
+                                    text <=> root.pixeldrain-credential;
+                                    placeholder-text: "Required";
+                                    input-type: InputType.password;
+                                    label: "Pixeldrain API key";
+                                }
+                            }
+                            if root.uploader-kind == 6: SettingGroup {
+                                label: "s-ul API key";
+                                description: "Required by s-ul.";
+                                CompactField {
+                                    field-enabled: !root.busy;
+                                    text <=> root.sul-credential;
+                                    placeholder-text: "Required";
+                                    input-type: InputType.password;
+                                    label: "s-ul API key";
+                                }
+                            }
+                            if root.uploader-kind == 0: SettingGroup {
+                                label: "Endpoint";
+                                description: "Your server returns ShareR JSON.";
+                                help: "The endpoint receives a multipart upload in the file field and returns the link, deletion link and expiry. HTTPS is strongly recommended.";
+                                CompactField {
+                                    field-enabled: !root.busy;
+                                    text <=> root.uploader-url;
+                                    placeholder-text: "https://uploads.example/upload";
+                                    label: "Custom upload endpoint";
+                                    edited => { root.custom-endpoint-edited(); }
+                                }
+                            }
+                            if root.uploader-kind == 0: Rectangle { height: 1px; background: Theme.border; }
+                            if root.uploader-kind == 0: SettingGroup {
+                                label: "Authentication header";
+                                description: "Optional. One extra header per upload.";
+                                HorizontalLayout {
+                                    spacing: 8px;
+
+                                    VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
+                                        horizontal-stretch: 1;
+                                        spacing: 5px;
+                                        Text { text: "Header name"; color: Theme.text-soft; font-size: 12px; }
+                                        CompactField {
+                                            field-enabled: !root.busy;
+                                            text <=> root.upload-header-name;
+                                            placeholder-text: "Authorization";
+                                            label: "Request header name";
+                                            edited => { root.custom-header-edited(); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        min-width: 0px;
+                                        preferred-width: 0px;
+                                        horizontal-stretch: 1;
+                                        spacing: 5px;
+                                        Text { text: "Header value"; color: Theme.text-soft; font-size: 12px; }
+                                        CompactField {
+                                            field-enabled: !root.busy;
+                                            text <=> root.upload-header-value;
+                                            placeholder-text: "Optional credential";
+                                            input-type: InputType.password;
+                                            label: "Request header value";
+                                            edited => { root.custom-header-edited(); }
+                                        }
+                                    }
+                                }
+                            }
+                            if root.uploader-kind == 0: Rectangle { height: 1px; background: Theme.border; }
+                            if root.uploader-kind == 0: SettingGroup {
+                                label: "Delete upload after";
+                                description: "Optional. No expiry leaves retention to the server.";
+                                help: "No expiry omits the deletion request. Your server may still impose a retention limit; this does not guarantee permanent storage.";
+                                HorizontalLayout {
+                                    spacing: 6px;
+
+                                    SelectableButton { text: "No expiry"; min-width: 86px; enabled: !root.busy; selected: root.lifetime-seconds == 0; clicked => { root.lifetime-seconds = 0; } }
+                                    SelectableButton { text: "1 hour"; enabled: !root.busy; selected: root.lifetime-seconds == 3600; clicked => { root.lifetime-seconds = 3600; } }
+                                    SelectableButton { text: "1 day"; enabled: !root.busy; selected: root.lifetime-seconds == 86400; clicked => { root.lifetime-seconds = 86400; } }
+                                    SelectableButton { text: "1 week"; enabled: !root.busy; selected: root.lifetime-seconds == 604800; clicked => { root.lifetime-seconds = 604800; } }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    NumberStepper {
+                                        enabled: !root.busy;
+                                        width: 120px;
+                                        label: "Custom expiry in seconds; zero requests no expiry";
+                                        value <=> root.lifetime-seconds;
+                                        minimum: 0;
+                                        maximum: 604800;
+                                        step-size: 1;
+                                    }
+                                    Text { text: root.lifetime-seconds == 0 ? "No expiry requested" : "seconds"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                }
+                            }
+                        }
+                        Text {
+                            text: "Public services set their own retention limits. The optional expiry request applies only to a custom server.";
+                            color: Theme.text-muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
                         }
                     }
+                }
+
+                if root.selected-section == 3: SettingsPane {
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "Files and identity"; }
+                        SettingsCard {
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Remove identifying image metadata";
+                                description: "Files and clipboard images only. Keeps colour profiles.";
+                                help: "JPEG, PNG and WebP. Removes EXIF, ordinary XMP/IPTC, comments and PNG text. Unsupported mixed HDR metadata blocks the upload rather than leaking fields.";
+                                checked <=> root.remove-exif;
+                            }
+                            Rectangle { height: 1px; background: Theme.border; }
+                            SettingRow {
+                                label: "File name";
+                                description: "Window titles can reveal your work.";
+                                CompactSelect {
+                                    control-enabled: !root.busy;
+                                    label: "Capture file name mode";
+                                    model: ["Active window title", "Random ID (private)", "Adjective-animal-1234", "Custom base name"];
+                                    current-index <=> root.capture-name-mode;
+                                }
+                            }
+                            if root.capture-name-mode == 3: Rectangle { height: 1px; background: Theme.border; }
+                            if root.capture-name-mode == 3: SettingRow {
+                                label: "Custom base name";
+                                description: "Characters are sanitized; the extension is added.";
+                                CompactField {
+                                    field-enabled: !root.busy;
+                                    text <=> root.capture-custom-name;
+                                    placeholder-text: "project-screenshot";
+                                    label: "Custom capture base name";
+                                }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        SectionHeading { text: "Network"; }
+                        SettingsCard {
+                            ToggleRow {
+                                enabled: !root.busy;
+                                title: "Only upload through a local proxy";
+                                description: "SOCKS5 on 127.0.0.1:9050 or :9150. No direct fallback.";
+                                help: "ShareR checks that a SOCKS5 proxy answers, but does not verify Tor routing or anonymity. Use a proxy you trust.";
+                                checked <=> root.require-tor;
+                            }
+                        }
+                    }
+                }
             }
         }
     }

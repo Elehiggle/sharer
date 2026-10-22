@@ -143,9 +143,21 @@ jobs:
         if: runner.os == 'macOS'
         run: echo 'MACOSX_DEPLOYMENT_TARGET=14.0' >> "$GITHUB_ENV"
 
-      - name: Test Windows SDR and HDR capture encoding
+      - name: Test Windows headless behavior
         if: runner.os == 'Windows'
-        run: cargo test --locked --profile ci --features desktop --lib --target "${{ matrix.target }}" capture::windows_hdr::tests
+        run: cargo test --locked --profile ci --lib --bins --tests --target "${{ matrix.target }}"
+
+      - name: Test Windows desktop behavior
+        if: runner.os == 'Windows'
+        run: cargo test --locked --profile ci --features desktop --lib --bins --tests --target "${{ matrix.target }}"
+
+      - name: Test macOS headless behavior
+        if: runner.os == 'macOS'
+        run: cargo test --locked --profile ci --lib --bins --tests --target "${{ matrix.target }}"
+
+      - name: Test macOS desktop behavior
+        if: runner.os == 'macOS'
+        run: cargo test --locked --profile ci --features desktop --lib --bins --tests --target "${{ matrix.target }}"
 
       - name: Build requested binary
         run: cargo build --locked --release ${{ matrix.cargo_features }} --target "${{ matrix.target }}"

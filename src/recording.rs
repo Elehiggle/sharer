@@ -19,12 +19,11 @@ mod webp;
 
 use webp::WebpWriter;
 
-const MAX_RECORDING_BYTES: u64 = 256 * 1024 * 1024;
-
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RecordingSettings {
     pub(super) frames_per_second: u32,
     pub(super) max_seconds: u32,
+    pub(super) max_bytes: u64,
     pub(super) capture_resolution: CaptureResolution,
 }
 
@@ -45,7 +44,8 @@ pub(super) fn capture_region(
 
     let capturer = RegionCapturer::new_for_recording(region, settings.capture_resolution)?;
     let output = tempfile::tempfile().context("failed to create a temporary recording file")?;
-    let writer = WebpWriter::new(output, capturer.dimensions(), MAX_RECORDING_BYTES)?;
+    let writer = WebpWriter::new(output, capturer.dimensions(), settings.max_bytes)?;
+
     let animation = record_frames(
         writer,
         stop,
@@ -55,9 +55,12 @@ pub(super) fn capture_region(
             capture: || capturer.capture_rgba(),
         },
     )?;
-    let warning = animation
-        .stopped_at_limit
-        .then(|| "recording stopped at the 256 MiB file limit".to_owned());
+    let warning = animation.stopped_at_limit.then(|| {
+        format!(
+            "recording stopped at the {} GiB file limit",
+            settings.max_bytes / (1024 * 1024 * 1024)
+        )
+    });
 
     Ok(RecordedCapture {
         payload: UploadPayload::from_reader(
@@ -99,6 +102,7 @@ where
     let RecordingSettings {
         frames_per_second,
         max_seconds,
+        max_bytes: _,
         capture_resolution: _,
     } = settings;
     let dimensions = writer.dimensions();
@@ -127,7 +131,7 @@ where
                 .context("recording duration is too long")?
                 .max(elapsed_timestamp),
 
-            None => elapsed_timestamp,
+            None => 0,
         };
         let image = capture().context("failed to capture a recording frame")?;
 
@@ -170,12 +174,13 @@ where
         }
     }
 
-    let final_timestamp = duration_timestamp(now().saturating_duration_since(started))?.max(
-        last_timestamp
-            .context("recording produced no frames")?
-            .checked_add(1)
-            .context("recording duration is too long")?,
-    );
+    let final_timestamp =
+        duration_timestamp(now().min(deadline).saturating_duration_since(started))?.max(
+            last_timestamp
+                .context("recording produced no frames")?
+                .checked_add(1)
+                .context("recording duration is too long")?,
+        );
     let (output, length) = writer.finish(final_timestamp)?;
 
     Ok(RecordedAnimation {

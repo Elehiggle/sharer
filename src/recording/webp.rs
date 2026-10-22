@@ -9,6 +9,7 @@ use anyhow::{Context as _, Result, bail};
 use sharer::capture::recording_frame_bytes;
 
 const HEADER_BYTES: u64 = 44;
+const MAX_FILE_BYTES: u64 = u32::MAX as u64 + 8;
 
 struct FramePosition {
     duration_offset: u64,
@@ -51,7 +52,7 @@ where
             output,
             dimensions,
             length: HEADER_BYTES,
-            max_bytes,
+            max_bytes: max_bytes.min(MAX_FILE_BYTES),
             previous: None,
             has_alpha: false,
         })
@@ -329,5 +330,22 @@ mod tests {
         for bytes in [b"RIFF".as_slice(), b"RIFF\x04\0\0\0WEBPVP8 "] {
             assert!(frame_data(bytes, (2, 2)).is_err());
         }
+    }
+
+    #[test]
+    fn format_ceiling_stops_before_appending_an_unrepresentable_frame() {
+        let encoded = crate::recording::encode_frame((2, 2), &[255; 16]).unwrap();
+        let mut writer =
+            super::WebpWriter::new(std::io::Cursor::new(Vec::new()), (2, 2), u64::MAX).unwrap();
+
+        assert!(writer.add_frame(&encoded, 0).unwrap());
+        let bytes = writer.output.get_ref().clone();
+
+        // Exercise the size arithmetic without allocating or writing four GiB.
+        writer.length = super::MAX_FILE_BYTES - 1;
+
+        assert!(!writer.add_frame(&encoded, 20).unwrap());
+        assert_eq!(writer.output.get_ref(), &bytes);
+        assert_eq!(writer.previous.as_ref().unwrap().timestamp, 0);
     }
 }
