@@ -1,9 +1,10 @@
 import { Icons, Theme } from "theme.slint";
-import { CaptionText, IconBox, NavButton } from "components.slint";
+import { CaptionText, IconBox, NavButton, StatusBar } from "components.slint";
 import { HistoryRow } from "models.slint";
 import { CaptureView } from "views/capture.slint";
 import { HistoryView } from "views/history.slint";
 import { SettingsView } from "views/settings.slint";
+import { OnboardingView } from "views/onboarding.slint";
 import { FfmpegSetup } from "ffmpeg-setup.slint";
 import { RegionWindow } from "region.slint";
 
@@ -11,11 +12,11 @@ export { HistoryRow, RegionWindow }
 
 export component AppWindow inherits Window {
     title: "ShareR";
-    default-font-size: 12px;
+    default-font-size: 14px;
     preferred-width: 920px;
     preferred-height: 620px;
-    min-width: 760px;
-    min-height: 520px;
+    min-width: 640px;
+    min-height: 460px;
     background: Theme.bg;
 
     in property <image> app-icon: @image-url("../assets/sharer.png");
@@ -23,10 +24,14 @@ export component AppWindow inherits Window {
     in-out property <int> repaint-sequence: 0;
     in-out property <int> current-page: 0;
     in-out property <int> uploader-kind: 0;
+    in-out property <string> uploader-name: "Custom";
     in-out property <string> uploader-url: "";
     in-out property <string> imgur-credential: "";
     in-out property <string> vgy-credential: "";
     in-out property <string> sul-credential: "";
+    in-out property <string> pixeldrain-credential: "";
+    in property <[string]> provider-names;
+    in property <[string]> provider-limits;
     in-out property <string> upload-header-name: "";
     in-out property <string> upload-header-value: "";
     in-out property <string> upload-header-endpoint: "";
@@ -36,13 +41,14 @@ export component AppWindow inherits Window {
     in-out property <int> lifetime-seconds: 86400;
     in-out property <int> recording-fps: 30;
     in-out property <int> recording-max-seconds: 300;
+    in-out property <int> recording-max-gib: 2;
     in-out property <bool> recording-mp4: false;
     in-out property <bool> ffmpeg-setup-visible: false;
     in-out property <bool> ffmpeg-downloading: false;
     in-out property <float> ffmpeg-download-progress: 0;
     in-out property <string> ffmpeg-setup-message: "";
     in-out property <bool> save-captures: true;
-    in-out property <bool> auto-upload-captures: false;
+    in-out property <bool> auto-upload-captures: true;
     in-out property <bool> force-sdr-captures: false;
     in-out property <int> capture-resolution: 0;
     in-out property <int> resize-quality: 0;
@@ -50,19 +56,27 @@ export component AppWindow inherits Window {
     in-out property <bool> remove-exif: false;
     in-out property <string> capture-directory: "";
     in-out property <bool> minimize-to-tray: true;
+    in-out property <bool> tray-available: false;
     in-out property <bool> start-at-login: false;
     in-out property <string> region-hotkey: "control+PrintScreen";
+    in-out property <string> region-hotkey-label: "Ctrl+PrintScreen";
     in-out property <string> recording-hotkey: "control+shift+PrintScreen";
+    in-out property <string> recording-hotkey-label: "Ctrl+Shift+PrintScreen";
     in-out property <string> screen-hotkey: "PrintScreen";
+    in-out property <string> screen-hotkey-label: "PrintScreen";
     in-out property <string> clipboard-hotkey: "control+shift+V";
+    in-out property <string> clipboard-hotkey-label: "Ctrl+Shift+V";
     in-out property <int> capture-name-mode: 0;
     in-out property <string> capture-custom-name: "";
     in-out property <bool> require-tor: false;
-    in-out property <bool> completion-sound: false;
+    in-out property <bool> completion-sound: true;
+    in-out property <bool> copy-link-after-upload: true;
     in-out property <int> tray-click-action: 0;
     in-out property <string> hotkey-status: "";
     in-out property <string> status-text: "Ready";
     in-out property <string> status-detail: "";
+    in-out property <string> history-action-detail: "";
+    in-out property <bool> history-action-failed: false;
     in-out property <string> last-link: "";
     in-out property <string> last-local-path: "";
     in-out property <string> last-delete-url: "";
@@ -84,6 +98,41 @@ export component AppWindow inherits Window {
     in-out property <int> settings-section: 0;
     in-out property <int> shortcut-recording: 0;
 
+    in-out property <bool> onboarding-complete: false;
+    in-out property <bool> show-onboarding: false;
+    in-out property <bool> onboarding-reset: false;
+    in-out property <int> onboarding-step: 0;
+    in-out property <string> onboarding-error: "";
+    in-out property <int> wizard-provider: 1;
+    in-out property <bool> wizard-auto-upload: true;
+    in-out property <bool> wizard-sound: true;
+    in-out property <bool> wizard-start-at-login: false;
+    in-out property <string> wizard-imgur-credential: "";
+    in-out property <string> wizard-pixeldrain-credential: "";
+    in-out property <string> wizard-sul-credential: "";
+    in-out property <string> wizard-uploader-url: "";
+    in-out property <string> wizard-header-name: "";
+    in-out property <string> wizard-header-value: "";
+    in-out property <string> wizard-header-endpoint: "";
+    in-out property <int> wizard-lifetime-seconds: 86400;
+    in-out property <bool> wizard-save-captures: true;
+    in-out property <string> wizard-capture-directory: "";
+
+    property <bool> uploader-configured: root.uploader-kind == 0 ? root.uploader-url != "" : root.uploader-kind == 4 ? root.imgur-credential != "" : root.uploader-kind == 5 ? root.pixeldrain-credential != "" : root.uploader-kind == 6 ? root.sul-credential != "" : root.uploader-kind >= 1 && root.uploader-kind <= 3;
+    property <bool> show-history-action-status: root.current-page == 1 && !root.busy && !root.uploading && !root.recording && root.history-action-detail != "";
+    property <bool> status-is-error: root.status-text == "Upload failed"
+            || root.status-text == "Upload cancelled"
+            || root.status-text == "Upload timed out"
+            || root.status-text == "Saved locally, upload failed"
+            || root.status-text == "Saved locally, upload cancelled"
+            || root.status-text == "Saved locally, upload timed out"
+            || root.status-text == "Capture failed"
+            || root.status-text == "Save failed"
+            || root.status-text == "Settings invalid"
+            || root.status-text == "Settings not saved"
+            || root.status-text == "History action failed"
+            || root.status-text == "Setup required";
+
     in property <bool> presentation-ready: false;
     pure callback display-text(string) -> string;
     callback capture-region();
@@ -94,19 +143,23 @@ export component AppWindow inherits Window {
     callback cancel-upload();
     callback download-ffmpeg();
     callback cancel-ffmpeg-setup();
+    callback receipt-cleared();
     callback choose-capture-folder();
     callback open-capture-folder();
     callback open-link();
     callback copy-last-link();
     callback copy-last-delete();
+    callback open-last-delete();
     callback open-last-local();
     callback reveal-last-local();
     callback copy-last-file();
     callback open-history-link(string);
     callback copy-history-link(string);
     callback copy-history-delete(string);
+    callback open-history-delete(string);
     callback open-history-local(string);
     callback reveal-history-local(string);
+    callback upload-history-local(string);
     callback copy-history-file(string);
     callback copy-history-path(string);
     callback remove-history-entry(string);
@@ -116,11 +169,19 @@ export component AppWindow inherits Window {
     callback history-sort-column-clicked(int);
     callback open-update();
     callback save-settings();
+    callback discard-settings();
     callback settings-edited();
     callback custom-endpoint-edited();
     callback custom-header-edited();
     callback shortcut-recording-started();
     callback shortcut-recording-finished();
+    callback onboarding-finish();
+    callback onboarding-skip();
+    callback onboarding-continue();
+    callback wizard-endpoint-edited();
+    callback wizard-header-edited();
+    callback onboarding-restart();
+    callback reset-settings();
 
     changed current-page => {
         if root.current-page != 2 && root.shortcut-recording != 0 {
@@ -129,16 +190,27 @@ export component AppWindow inherits Window {
         }
     }
 
+    changed show-onboarding => {
+        if !root.show-onboarding {
+            if root.current-page == 1 { history-navigation.focus(); }
+            else if root.current-page == 2 { settings-navigation.focus(); }
+            else { capture-navigation.focus(); }
+        }
+    }
+
     changed uploader-kind => { root.settings-edited(); }
     changed uploader-url => { root.settings-edited(); }
     changed imgur-credential => { root.settings-edited(); }
     changed vgy-credential => { root.settings-edited(); }
     changed sul-credential => { root.settings-edited(); }
+    changed pixeldrain-credential => { root.settings-edited(); }
     changed upload-header-name => { root.settings-edited(); }
     changed upload-header-value => { root.settings-edited(); }
+    changed upload-header-endpoint => { root.settings-edited(); }
     changed lifetime-seconds => { root.settings-edited(); }
     changed recording-fps => { root.settings-edited(); }
     changed recording-max-seconds => { root.settings-edited(); }
+    changed recording-max-gib => { root.settings-edited(); }
     changed recording-mp4 => { root.settings-edited(); }
     changed save-captures => { root.settings-edited(); }
     changed auto-upload-captures => { root.settings-edited(); }
@@ -157,163 +229,214 @@ export component AppWindow inherits Window {
     changed capture-custom-name => { root.settings-edited(); }
     changed require-tor => { root.settings-edited(); }
     changed completion-sound => { root.settings-edited(); }
+    changed copy-link-after-upload => { root.settings-edited(); }
     changed tray-click-action => { root.settings-edited(); }
 
     icon: root.app-icon;
 
-    HorizontalLayout {
-        spacing: 0px;
-
-        Rectangle {
-            width: 176px;
-            background: Theme.sidebar;
-            border-width: 0px;
-
-            VerticalLayout {
-                padding: 12px;
-                spacing: 6px;
-
-                HorizontalLayout {
-                    height: 48px;
-                    spacing: 9px;
-                    IconBox { icon-source: root.app-icon; tint: transparent; icon-size: 32px; box-width: 32px; }
-                    Text { text: "ShareR"; color: Theme.text; font-size: 18px; font-weight: 700; vertical-alignment: center; }
-                }
-
-                Rectangle { height: 4px; background: transparent; }
-                NavButton { text: "Capture"; icon-source: Icons.capture; selected: root.current-page == 0; clicked => { root.current-page = 0; } }
-                NavButton { text: "History"; icon-source: Icons.history; selected: root.current-page == 1; clicked => { root.current-page = 1; } }
-                NavButton { text: "Settings"; icon-source: Icons.settings; selected: root.current-page == 2; clicked => { root.current-page = 2; } }
-
-                Rectangle { vertical-stretch: 1; background: transparent; }
-
-                CaptionText { text: "v" + root.app-version; horizontal-alignment: center; }
-            }
-        }
-
-        Rectangle {
-            horizontal-stretch: 1;
-            min-height: 0px;
-            background: Theme.bg;
-
-            if root.current-page == 0: CaptureView {
-                x: 20px; y: 18px; width: parent.width - 40px; height: parent.height - 36px;
-                busy: root.busy;
-                uploading: root.uploading;
-                upload-progress: root.upload-progress;
-                recording: root.recording;
-                configured: root.uploader-kind == 0 ? root.uploader-url != "" : root.uploader-kind == 1 ? root.imgur-credential != "" : root.uploader-kind == 5 ? root.sul-credential != "" : true;
-                capture-enabled: root.save-captures || (root.auto-upload-captures
-                    && (root.uploader-kind == 0 ? root.uploader-url != "" : root.uploader-kind == 1 ? root.imgur-credential != "" : root.uploader-kind == 5 ? root.sul-credential != "" : true));
-                region-hotkey: root.region-hotkey;
-                recording-hotkey: root.recording-hotkey;
-                screen-hotkey: root.screen-hotkey;
-                clipboard-hotkey: root.clipboard-hotkey;
-                status-text: root.presentation-ready ? root.display-text(root.status-text) : "";
-                status-detail: root.presentation-ready ? root.display-text(root.status-detail) : "";
-                last-link: root.presentation-ready ? root.display-text(root.last-link) : "";
-                last-local-path: root.presentation-ready ? root.display-text(root.last-local-path) : "";
-                last-delete-url: root.last-delete-url;
-                last-delete-saved: root.last-delete-saved;
-                update-available: root.update-available;
-                update-version: root.presentation-ready ? root.display-text(root.update-version) : "";
-                capture-region => { root.capture-region(); }
-                record-region => { root.record-region(); }
-                capture-screen => { root.capture-screen(); }
-                upload-clipboard => { root.upload-clipboard(); }
-                choose-file => { root.choose-file(); }
-                cancel-upload => { root.cancel-upload(); }
-                open-link => { root.open-link(); }
-                copy-link => { root.copy-last-link(); }
-                copy-delete => { root.copy-last-delete(); }
-                open-local => { root.open-last-local(); }
-                reveal-local => { root.reveal-last-local(); }
-                copy-file => { root.copy-last-file(); }
-                open-update => { root.open-update(); }
-                show-settings => {
-                    root.settings-section = 2;
-                    root.current-page = 2;
-                }
-            }
-
-            if root.current-page == 1: HistoryView {
-                x: 20px; y: 18px; width: parent.width - 40px; height: parent.height - 36px;
-                rows: root.history-rows;
-                page-label: root.history-page-label;
-                has-previous: root.history-has-previous;
-                has-next: root.history-has-next;
-                sort-column: root.history-sort-column;
-                sort-ascending: root.history-sort-ascending;
-                open-link(action-token) => { root.open-history-link(action-token); }
-                copy-link(action-token) => { root.copy-history-link(action-token); }
-                copy-delete-link(action-token) => { root.copy-history-delete(action-token); }
-                open-local(action-token) => { root.open-history-local(action-token); }
-                reveal-local(action-token) => { root.reveal-history-local(action-token); }
-                copy-file(action-token) => { root.copy-history-file(action-token); }
-                copy-path(action-token) => { root.copy-history-path(action-token); }
-                remove-entry(action-token) => { root.remove-history-entry(action-token); }
-                delete-local(action-token) => { root.delete-history-local(action-token); }
-                previous-page => { root.history-previous(); }
-                next-page => { root.history-next(); }
-                sort-column-clicked(column) => { root.history-sort-column-clicked(column); }
-            }
-
-            if root.current-page == 2: SettingsView {
-                x: 20px; y: 18px; width: parent.width - 40px; height: parent.height - 36px;
-                selected-section <=> root.settings-section;
-                uploader-kind <=> root.uploader-kind;
-                uploader-url <=> root.uploader-url;
-                imgur-credential <=> root.imgur-credential;
-                vgy-credential <=> root.vgy-credential;
-                sul-credential <=> root.sul-credential;
-                upload-header-name <=> root.upload-header-name;
-                upload-header-value <=> root.upload-header-value;
-                custom-endpoint-edited => { root.custom-endpoint-edited(); }
-                custom-header-edited => { root.custom-header-edited(); }
-                lifetime-seconds <=> root.lifetime-seconds;
-                recording-fps <=> root.recording-fps;
-                recording-max-seconds <=> root.recording-max-seconds;
-                recording-mp4 <=> root.recording-mp4;
-                save-captures <=> root.save-captures;
-                auto-upload-captures <=> root.auto-upload-captures;
-                force-sdr-captures <=> root.force-sdr-captures;
-                capture-resolution <=> root.capture-resolution;
-                resize-quality <=> root.resize-quality;
-                retina-scaling-available: root.retina-scaling-available;
-                remove-exif <=> root.remove-exif;
-                capture-directory <=> root.capture-directory;
-                minimize-to-tray <=> root.minimize-to-tray;
-                start-at-login <=> root.start-at-login;
-                region-hotkey <=> root.region-hotkey;
-                recording-hotkey <=> root.recording-hotkey;
-                screen-hotkey <=> root.screen-hotkey;
-                clipboard-hotkey <=> root.clipboard-hotkey;
-                capture-name-mode <=> root.capture-name-mode;
-                capture-custom-name <=> root.capture-custom-name;
-                require-tor <=> root.require-tor;
-                completion-sound <=> root.completion-sound;
-                tray-click-action <=> root.tray-click-action;
-                hotkey-status: root.hotkey-status;
-                app-version: root.app-version;
-                update-status: root.presentation-ready ? root.display-text(root.update-status) : "";
-                update-available: root.update-available;
-                settings-dirty: root.settings-dirty;
-                shortcut-recording <=> root.shortcut-recording;
-                choose-capture-folder => { root.choose-capture-folder(); }
-                open-capture-folder => { root.open-capture-folder(); }
-                save-settings => { root.save-settings(); }
-                open-update => { root.open-update(); }
-                shortcut-recording-started => { root.shortcut-recording-started(); }
-                shortcut-recording-finished => { root.shortcut-recording-finished(); }
-            }
-        }
-    }
-
+    // Hiding this subtree keeps setup's keyboard traversal and pointer input modal.
+    // The view instances remain alive so replay preserves the underlying page state.
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: Math.mod(root.repaint-sequence, 2) == 0 ? #00000000 : #ffffff00;
+        visible: !root.show-onboarding;
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            Rectangle {
+                width: 176px;
+                background: Theme.sidebar;
+
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+
+                    HorizontalLayout {
+                        height: 48px;
+                        spacing: 9px;
+                        alignment: start;
+
+                        IconBox { icon-source: root.app-icon; tint: transparent; icon-size: 32px; box-width: 32px; }
+                        Text { text: "ShareR"; color: Theme.text; font-size: 19px; font-weight: 600; vertical-alignment: center; }
+                    }
+
+                    Rectangle { height: 4px; background: transparent; }
+                    capture-navigation := NavButton { text: "Capture"; icon-source: Icons.capture; selected: root.current-page == 0; clicked => { root.current-page = 0; } }
+                    history-navigation := NavButton { text: "History"; icon-source: Icons.history; selected: root.current-page == 1; clicked => { root.current-page = 1; } }
+                    settings-navigation := NavButton { text: "Settings"; icon-source: Icons.settings; selected: root.current-page == 2; clicked => { root.current-page = 2; } }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+
+                    CaptionText { text: "v" + root.app-version; horizontal-alignment: center; }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                min-height: 0px;
+                background: Theme.bg;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 0px;
+
+                        if root.current-page == 0: CaptureView {
+                            x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
+                            busy: root.busy;
+                            settings-dirty: root.settings-dirty;
+                            uploading: root.uploading;
+                            upload-progress: root.upload-progress;
+                            recording: root.recording;
+                            configured: root.uploader-configured;
+                            auto-upload: root.auto-upload-captures;
+                            uploader-name: root.uploader-name;
+                            capture-enabled: root.save-captures || (root.auto-upload-captures && root.uploader-configured);
+                            region-hotkey: root.region-hotkey-label;
+                            recording-hotkey: root.recording-hotkey-label;
+                            screen-hotkey: root.screen-hotkey-label;
+                            clipboard-hotkey: root.clipboard-hotkey-label;
+                            status-text: root.presentation-ready ? root.display-text(root.status-text) : "";
+                            status-detail: root.presentation-ready ? root.display-text(root.status-detail) : "";
+                            last-link: root.presentation-ready ? root.display-text(root.last-link) : "";
+                            last-local-path: root.presentation-ready ? root.display-text(root.last-local-path) : "";
+                            last-delete-url: root.last-delete-url;
+                            last-delete-saved: root.last-delete-saved;
+                            update-available: root.update-available;
+                            update-version: root.presentation-ready ? root.display-text(root.update-version) : "";
+                            capture-region => { root.capture-region(); }
+                            record-region => { root.record-region(); }
+                            capture-screen => { root.capture-screen(); }
+                            upload-clipboard => { root.upload-clipboard(); }
+                            choose-file => { root.choose-file(); }
+                            cancel-upload => { root.cancel-upload(); }
+                            open-link => { root.open-link(); }
+                            copy-link => { root.copy-last-link(); }
+                            copy-delete => { root.copy-last-delete(); }
+                            open-delete => { root.open-last-delete(); }
+                            open-local => { root.open-last-local(); }
+                            reveal-local => { root.reveal-last-local(); }
+                            copy-file => { root.copy-last-file(); }
+                            open-update => { root.open-update(); }
+                            show-settings => {
+                                root.settings-section = 2;
+                                root.current-page = 2;
+                            }
+                            review-settings => { root.current-page = 2; }
+                            show-capture-settings => {
+                                root.settings-section = 1;
+                                root.current-page = 2;
+                            }
+                            show-general-settings => {
+                                root.settings-section = 0;
+                                root.current-page = 2;
+                            }
+                        }
+
+                        if root.current-page == 1: HistoryView {
+                            x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
+                            rows: root.history-rows;
+                            page-label: root.history-page-label;
+                            has-previous: root.history-has-previous;
+                            has-next: root.history-has-next;
+                            sort-column: root.history-sort-column;
+                            sort-ascending: root.history-sort-ascending;
+                            upload-enabled: root.uploader-configured && !root.busy && !root.settings-dirty && !root.show-onboarding;
+                            upload-provider: root.uploader-name;
+                            settings-dirty: root.settings-dirty;
+                            open-link(action-token) => { root.open-history-link(action-token); }
+                            copy-link(action-token) => { root.copy-history-link(action-token); }
+                            copy-delete-link(action-token) => { root.copy-history-delete(action-token); }
+                            open-delete-link(action-token) => { root.open-history-delete(action-token); }
+                            open-local(action-token) => { root.open-history-local(action-token); }
+                            reveal-local(action-token) => { root.reveal-history-local(action-token); }
+                            upload-local(action-token) => { root.upload-history-local(action-token); }
+                            copy-file(action-token) => { root.copy-history-file(action-token); }
+                            copy-path(action-token) => { root.copy-history-path(action-token); }
+                            show-settings => { root.current-page = 2; }
+                            remove-entry(action-token) => { root.remove-history-entry(action-token); }
+                            delete-local(action-token) => { root.delete-history-local(action-token); }
+                            previous-page => { root.history-previous(); }
+                            next-page => { root.history-next(); }
+                            sort-column-clicked(column) => { root.history-sort-column-clicked(column); }
+                            show-capture => { root.current-page = 0; }
+                        }
+
+                        if root.current-page == 2: SettingsView {
+                            x: 24px; y: 20px; width: parent.width - 48px; height: parent.height - 40px;
+                            selected-section <=> root.settings-section;
+                            busy: root.busy;
+                            uploader-kind <=> root.uploader-kind;
+                            uploader-name: root.uploader-name;
+                            uploader-url <=> root.uploader-url;
+                            imgur-credential <=> root.imgur-credential;
+                            pixeldrain-credential <=> root.pixeldrain-credential;
+                            provider-names: root.provider-names;
+                            provider-limits: root.provider-limits;
+                            sul-credential <=> root.sul-credential;
+                            upload-header-name <=> root.upload-header-name;
+                            upload-header-value <=> root.upload-header-value;
+                            custom-endpoint-edited => { root.custom-endpoint-edited(); }
+                            custom-header-edited => { root.custom-header-edited(); }
+                            lifetime-seconds <=> root.lifetime-seconds;
+                            recording-fps <=> root.recording-fps;
+                            recording-max-seconds <=> root.recording-max-seconds;
+                            recording-max-gib <=> root.recording-max-gib;
+                            recording-mp4 <=> root.recording-mp4;
+                            save-captures <=> root.save-captures;
+                            auto-upload-captures <=> root.auto-upload-captures;
+                            force-sdr-captures <=> root.force-sdr-captures;
+                            capture-resolution <=> root.capture-resolution;
+                            resize-quality <=> root.resize-quality;
+                            retina-scaling-available: root.retina-scaling-available;
+                            remove-exif <=> root.remove-exif;
+                            capture-directory <=> root.capture-directory;
+                            minimize-to-tray <=> root.minimize-to-tray;
+                            start-at-login <=> root.start-at-login;
+                            completion-sound <=> root.completion-sound;
+                            copy-link-after-upload <=> root.copy-link-after-upload;
+                            region-hotkey <=> root.region-hotkey;
+                            recording-hotkey <=> root.recording-hotkey;
+                            screen-hotkey <=> root.screen-hotkey;
+                            clipboard-hotkey <=> root.clipboard-hotkey;
+                            capture-name-mode <=> root.capture-name-mode;
+                            capture-custom-name <=> root.capture-custom-name;
+                            require-tor <=> root.require-tor;
+                            tray-click-action <=> root.tray-click-action;
+                            configured: root.uploader-configured;
+                            hotkey-status: root.hotkey-status;
+                            app-version: root.app-version;
+                            update-status: root.presentation-ready ? root.display-text(root.update-status) : "";
+                            update-available: root.update-available;
+                            settings-dirty: root.settings-dirty;
+                            onboarding-complete: root.onboarding-complete;
+                            shortcut-recording <=> root.shortcut-recording;
+                            choose-capture-folder => { root.choose-capture-folder(); }
+                            open-capture-folder => { root.open-capture-folder(); }
+                            save-settings => { root.save-settings(); }
+                            discard-settings => { root.discard-settings(); }
+                            open-update => { root.open-update(); }
+                            shortcut-recording-started => { root.shortcut-recording-started(); }
+                            shortcut-recording-finished => { root.shortcut-recording-finished(); }
+                            restart-onboarding => { root.onboarding-restart(); }
+                            reset-settings => { root.reset-settings(); }
+                        }
+                    }
+
+                    StatusBar {
+                        text: root.presentation-ready ? root.display-text(root.show-history-action-status ? (root.history-action-failed ? "History action failed" : "History") : root.status-text) : "";
+                        detail: root.presentation-ready ? root.display-text(root.show-history-action-status ? root.history-action-detail : root.status-detail) : "";
+                        busy: root.busy || root.uploading || root.recording;
+                        error: root.show-history-action-status ? root.history-action-failed : root.status-is-error;
+                    }
+                }
+            }
+        }
     }
+
     if root.ffmpeg-setup-visible: FfmpegSetup {
         width: parent.width;
         height: parent.height;
@@ -322,5 +445,40 @@ export component AppWindow inherits Window {
         message: root.ffmpeg-setup-message;
         download => { root.download-ffmpeg(); }
         cancel => { root.cancel-ffmpeg-setup(); }
+    }
+
+    if root.show-onboarding: OnboardingView {
+        width: parent.width;
+        height: parent.height;
+        step <=> root.onboarding-step;
+        wizard-provider <=> root.wizard-provider;
+        provider-limits: root.provider-limits;
+        wizard-auto-upload <=> root.wizard-auto-upload;
+        wizard-sound <=> root.wizard-sound;
+        wizard-start-at-login <=> root.wizard-start-at-login;
+        wizard-imgur-credential <=> root.wizard-imgur-credential;
+        wizard-pixeldrain-credential <=> root.wizard-pixeldrain-credential;
+        wizard-sul-credential <=> root.wizard-sul-credential;
+        wizard-uploader-url <=> root.wizard-uploader-url;
+        wizard-header-name <=> root.wizard-header-name;
+        wizard-header-value <=> root.wizard-header-value;
+        wizard-lifetime-seconds <=> root.wizard-lifetime-seconds;
+        save-captures: root.wizard-save-captures;
+        capture-directory: root.wizard-capture-directory;
+        replay: root.onboarding-complete;
+        resetting: root.onboarding-reset;
+        endpoint-edited => { root.wizard-endpoint-edited(); }
+        header-edited => { root.wizard-header-edited(); }
+        continue-setup => { root.onboarding-continue(); }
+        error <=> root.onboarding-error;
+
+        finish => { root.onboarding-finish(); }
+        skip => { root.onboarding-skip(); }
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: Math.mod(root.repaint-sequence, 2) == 0 ? #00000000 : #ffffff00;
     }
 }

@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use super::*;
 
 pub(super) fn current_window(ui: &UiSlot) -> Option<AppWindow> {
@@ -102,10 +104,22 @@ pub(super) fn receive_job_result(
         return;
     };
 
-    if matches!(result, JobResult::CaptureComplete) {
-        let _ = window.show();
+    if let JobResult::CaptureComplete { restore_window } = result {
+        let was_recording = window.get_recording();
 
-        foreground_ui(window);
+        window.set_recording(false);
+        *state.recording_stop.borrow_mut() = None;
+
+        if was_recording && !window.get_uploading() {
+            window.set_status_text("Finishing recording...".into());
+            window.set_status_detail("Saving the animated WebP".into());
+        }
+
+        if restore_window {
+            let _ = window.show();
+
+            foreground_ui(window);
+        }
 
         return;
     }
@@ -119,6 +133,7 @@ pub(super) fn receive_job_result(
         *state.recording_stop.borrow_mut() = None;
         window.set_busy(false);
         window.set_uploading(false);
+        clear_last_receipt(window);
         let failure_status = stage.status();
 
         window.set_status_text(failure_status.into());
@@ -146,8 +161,8 @@ pub(super) fn receive_job_result(
     *state.recording_stop.borrow_mut() = None;
     let uploaded = !upload.entry.link.is_empty();
     let partial_upload_failure = upload.upload_failure.as_ref();
-    let play_sound =
-        uploaded && window.get_completion_sound() && upload.clipboard_warning.is_none();
+    let play_sound = uploaded && window.get_completion_sound();
+    let detail = upload_detail(&upload, uploaded);
     let history_saved = upload.history_warning.is_none();
     let entry = upload.entry;
 
@@ -167,40 +182,7 @@ pub(super) fn receive_job_result(
     }
 
     status.clear();
-    status.push_str(&entry.filename);
-
-    if let Some(path) = upload.local_copy {
-        status.push_str("  -  saved to ");
-        let _ = write!(status, "{}", path.display());
-    }
-
-    for warning in [upload.capture_warning, upload.history_warning]
-        .into_iter()
-        .flatten()
-    {
-        status.push_str("  -  ");
-        status.push_str(&warning);
-    }
-
-    if uploaded {
-        status.push_str("  -  ");
-        status.push_str(
-            upload
-                .clipboard_warning
-                .as_deref()
-                .unwrap_or("link copied to clipboard"),
-        );
-    }
-
-    if let Some(failure) = partial_upload_failure {
-        status.push_str("  -  saved locally while ");
-        status.push_str(match failure.stage {
-            FailureStage::UploadCancelled => "upload was cancelled: ",
-            FailureStage::UploadTimedOut => "upload timed out: ",
-            _ => "upload failed: ",
-        });
-        status.push_str(&failure.message);
-    }
+    status.push_str(&detail);
 
     refresh_history_after_insert(window, state, history_saved, status);
 
@@ -215,6 +197,50 @@ pub(super) fn receive_job_result(
         status: status_text.to_owned(),
     });
     finish_pending_quit(state);
+}
+
+pub(super) fn upload_detail(upload: &ProcessedUpload, uploaded: bool) -> String {
+    let mut detail = String::new();
+
+    if uploaded {
+        detail.push_str(if upload.clipboard_warning.is_some() {
+            "Link could not be copied"
+        } else if upload.clipboard_copied {
+            "Link copied to clipboard"
+        } else {
+            "Link ready to copy"
+        });
+    }
+
+    if upload.local_copy.is_some() {
+        push_detail(&mut detail, "Saved locally");
+    }
+
+    if let Some(warning) = &upload.capture_warning {
+        push_detail(&mut detail, warning);
+    }
+
+    if upload.history_warning.is_some() {
+        push_detail(&mut detail, "History entry could not be saved");
+    }
+
+    if let Some(failure) = &upload.upload_failure {
+        if failure.stage == FailureStage::UploadCancelled {
+            push_detail(&mut detail, failure.stage.status());
+        } else {
+            push_detail(&mut detail, &format!("{:#}", failure.error));
+        }
+    }
+
+    detail
+}
+
+fn push_detail(detail: &mut String, part: &str) {
+    if !detail.is_empty() {
+        detail.push_str("  ·  ");
+    }
+
+    detail.push_str(part);
 }
 
 pub(super) fn finish_pending_quit(state: &PollingState) {
@@ -271,6 +297,25 @@ pub(super) fn apply_activity(window: &AppWindow, activity: &ActivitySnapshot) {
     window.set_last_delete_saved(activity.history_saved);
 }
 
+pub(super) fn invalidate_latest_history_saved(
+    window: &AppWindow,
+    activity: &RefCell<Option<ActivitySnapshot>>,
+    entry_id: i64,
+) -> bool {
+    let mut activity = activity.borrow_mut();
+    let Some(snapshot) = activity
+        .as_mut()
+        .filter(|snapshot| entry_id != 0 && snapshot.entry_id == entry_id)
+    else {
+        return false;
+    };
+
+    snapshot.history_saved = false;
+    window.set_last_delete_saved(false);
+
+    true
+}
+
 pub(super) fn invalidate_latest_local_path(
     window: &AppWindow,
     activity: &RefCell<Option<ActivitySnapshot>>,
@@ -282,6 +327,13 @@ pub(super) fn invalidate_latest_local_path(
 
     if window_matches || activity_matches {
         window.set_last_local_path(String::new().into());
+    }
+
+    if window_matches {
+        let mut detail = window.get_status_detail().to_string();
+
+        push_detail(&mut detail, "Local file no longer available");
+        window.set_status_detail(detail.into());
     }
 
     window_matches || activity_matches
@@ -298,8 +350,13 @@ pub(super) fn invalidate_activity_local_path(
             || std::path::Path::new(&snapshot.local_path) == path
     });
 
-    if matches && let Some(snapshot) = activity.as_mut() {
+    if matches
+        && let Some(snapshot) = activity
+            .as_mut()
+            .filter(|snapshot| !snapshot.local_path.is_empty())
+    {
         snapshot.local_path.clear();
+        push_detail(&mut snapshot.detail, "Local file no longer available");
     }
 
     matches
@@ -334,7 +391,12 @@ pub(super) fn apply_update(window: &AppWindow, update: &UpdateCheck) {
 
         UpdateCheck::Failed(error) => {
             window.set_update_available(false);
-            window.set_update_status(format!("Update check unavailable: {error}").into());
+            let _ = crate::write_error(
+                &mut std::io::stderr().lock(),
+                &anyhow::anyhow!("Update check unavailable: {error}"),
+            );
+
+            window.set_update_status("Could not check for updates. Try again later.".into());
         }
     }
 }

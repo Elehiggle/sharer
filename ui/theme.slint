@@ -1,26 +1,37 @@
 export global Theme {
     out property <color> bg: #090d10;
-    out property <color> sidebar: #0d1216;
-    out property <color> surface: #12191e;
+    out property <color> sidebar: #0c1115;
+    out property <color> surface: #11181d;
     out property <color> surface-hover: #182229;
-    out property <color> surface-raised: #1c272e;
-    out property <color> border: #27343b;
-    out property <color> border-bright: #3b505a;
+    out property <color> surface-raised: #1a252c;
+    out property <color> border: #2a3a42;
+    out property <color> border-bright: #435b66;
     out property <color> primary: #28b7c4;
-    out property <color> primary-bright: #54d7e2;
+    out property <color> primary-bright: #64dfe9;
     out property <color> primary-soft: #28b7c426;
-    out property <color> accent: #d77b42;
-    out property <color> accent-soft: #d77b4226;
-    out property <color> success: #54b77a;
-    out property <color> success-soft: #54b77a24;
-    out property <color> text: #f1f6f8;
-    out property <color> text-soft: #a7b5bb;
-    out property <color> text-muted: #68777e;
-    out property <color> danger: #ef7373;
-    out property <color> danger-soft: #ef737321;
-    out property <length> control-height: 28px;
-    out property <length> control-radius: 5px;
+    out property <color> accent: #e08a4c;
+    out property <color> accent-soft: #e08a4c26;
+    out property <color> success: #63c98b;
+    out property <color> success-soft: #63c98b24;
+    out property <color> text: #f3f7f9;
+    out property <color> text-soft: #b6c4cb;
+    out property <color> text-muted: #8b9aa1;
+    out property <color> danger: #ff8585;
+    out property <color> danger-soft: #ff858526;
+
+    out property <length> control-height: 32px;
+    out property <length> control-radius: 6px;
     out property <length> card-radius: 10px;
+    out property <length> page-padding: 24px;
+    out property <length> card-padding: 16px;
+    out property <length> status-height: 34px;
+    out property <length> settings-max: 720px;
+    out property <length> content-max: 1120px;
+
+    out property <length> font-caption: 12px;
+    out property <length> font-body: 14px;
+    out property <length> font-label: 13px;
+    out property <length> font-title: 23px;
 }
 
 export global Icons {
@@ -40,4 +51,5 @@ export global Icons {
     out property <image> warning: @image-url("../assets/icons/triangle-exclamation.svg");
     out property <image> trash: @image-url("../assets/icons/trash.svg");
     out property <image> chevron-down: @image-url("../assets/icons/chevron-down.svg");
+    out property <image> check: @image-url("../assets/icons/check.svg");
 }

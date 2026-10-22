@@ -20,6 +20,7 @@ fn download_source_matches_each_shipped_platform_and_architecture() {
     let windows = source_for("windows", "x86_64").unwrap();
 
     assert!(windows.archive_url.starts_with("https://www.gyan.dev/"));
+
     for (os, architecture, path) in [
         ("linux", "x86_64", "/linux/amd64/"),
         ("linux", "aarch64", "/linux/arm64/"),
@@ -38,6 +39,7 @@ fn download_source_matches_each_shipped_platform_and_architecture() {
         assert_eq!(source.sha256.len(), 64);
         assert!(source.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
+
     assert!(source_for("windows", "aarch64").is_err());
     assert!(source_for("linux", "arm").is_err());
 }

@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DEFAULT_RECORDING_SECONDS, MAX_LIFETIME_SECONDS,
+    DEFAULT_RECORDING_GIB, DEFAULT_RECORDING_SECONDS, MAX_LIFETIME_SECONDS, MAX_RECORDING_GIB,
     storage::Storage,
     upload::{UploadTarget, UploaderKind, canonical_uploader_endpoint},
-    validate_lifetime, validate_recording_fps, validate_recording_seconds,
+    validate_lifetime, validate_recording_fps, validate_recording_gib, validate_recording_seconds,
 };
 
 const DEFAULT_LIFETIME_SECONDS: u32 = 24 * 60 * 60;
@@ -20,6 +20,7 @@ const CONFIG_KEY: &str = "application";
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
+    #[serde(default)]
     pub uploader_kind: UploaderKind,
     pub uploader_url: String,
     pub uploader_credentials: ProviderCredentials,
@@ -28,9 +29,11 @@ pub struct AppConfig {
     /// Authorized destination; absent only in configurations predating endpoint binding.
     #[serde(default)]
     pub upload_header_endpoint: Option<String>,
+    /// Requested custom-uploader lifetime; zero leaves retention to the server.
     pub lifetime_seconds: u32,
     pub recording_fps: u32,
     pub recording_max_seconds: u32,
+    pub recording_max_gib: u32,
     pub recording_format: RecordingFormat,
     pub capture_directory: String,
     pub capture_naming: CaptureNamingConfig,
@@ -59,6 +62,7 @@ pub enum RecordingFormat {
 )]
 pub struct BehaviorConfig {
     pub save_captures: bool,
+    #[serde(default)]
     pub auto_upload_captures: bool,
     pub force_sdr_captures: bool,
     pub capture_resolution: CaptureResolution,
@@ -67,6 +71,8 @@ pub struct BehaviorConfig {
     pub minimize_to_tray: bool,
     pub start_at_login: bool,
     pub completion_sound: bool,
+    pub copy_link_after_upload: bool,
+    pub onboarding_complete: bool,
     pub tray_click_action: TrayClickAction,
 }
 
@@ -74,13 +80,15 @@ impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
             save_captures: true,
-            auto_upload_captures: false,
+            auto_upload_captures: true,
             force_sdr_captures: false,
             capture_resolution: CaptureResolution::Native,
             resize_quality: ResizeQuality::Fast,
             minimize_to_tray: true,
             start_at_login: false,
-            completion_sound: false,
+            completion_sound: true,
+            copy_link_after_upload: true,
+            onboarding_complete: false,
             tray_click_action: TrayClickAction::Region,
         }
     }
@@ -217,6 +225,7 @@ pub struct PrivacyConfig {
 #[serde(default)]
 pub struct ProviderCredentials {
     pub imgur: String,
+    pub pixeldrain: String,
     pub vgy: String,
     pub sul: String,
 }
@@ -227,9 +236,14 @@ impl ProviderCredentials {
     pub fn for_provider(&self, kind: UploaderKind) -> &str {
         match kind {
             UploaderKind::Imgur => &self.imgur,
+            UploaderKind::Pixeldrain => &self.pixeldrain,
             UploaderKind::Vgy => &self.vgy,
             UploaderKind::Sul => &self.sul,
-            UploaderKind::Custom | UploaderKind::Uguu | UploaderKind::TransferSh => "",
+            UploaderKind::Custom
+            | UploaderKind::Uguu
+            | UploaderKind::Catbox
+            | UploaderKind::Litterbox
+            | UploaderKind::TransferSh => "",
         }
     }
 
@@ -237,9 +251,14 @@ impl ProviderCredentials {
     pub fn set_for_provider(&mut self, kind: UploaderKind, credential: String) {
         match kind {
             UploaderKind::Imgur => self.imgur = credential,
+            UploaderKind::Pixeldrain => self.pixeldrain = credential,
             UploaderKind::Vgy => self.vgy = credential,
             UploaderKind::Sul => self.sul = credential,
-            UploaderKind::Custom | UploaderKind::Uguu | UploaderKind::TransferSh => {}
+            UploaderKind::Custom
+            | UploaderKind::Uguu
+            | UploaderKind::Catbox
+            | UploaderKind::Litterbox
+            | UploaderKind::TransferSh => {}
         }
     }
 }
@@ -249,6 +268,7 @@ impl fmt::Debug for ProviderCredentials {
         formatter
             .debug_struct("ProviderCredentials")
             .field("imgur_configured", &!self.imgur.is_empty())
+            .field("pixeldrain_configured", &!self.pixeldrain.is_empty())
             .field("vgy_configured", &!self.vgy.is_empty())
             .field("sul_configured", &!self.sul.is_empty())
             .finish()
@@ -343,8 +363,19 @@ impl AppConfig {
         else {
             return Ok(Self::default());
         };
+        let stored = serde_json::from_slice::<serde_json::Value>(&contents).ok();
+        let onboarding_key_present = stored
+            .as_ref()
+            .and_then(|value| value.get("onboarding_complete"))
+            .is_some();
         let mut config =
             serde_json::from_slice::<Self>(&contents).context("failed to decode configuration")?;
+
+        // Configurations written before first-run setup existed belong to users
+        // who already chose their settings; do not show the wizard to them.
+        if !onboarding_key_present {
+            config.behavior.onboarding_complete = true;
+        }
 
         if config.upload_header_endpoint.is_none() {
             config.upload_header_endpoint =
@@ -361,6 +392,12 @@ impl AppConfig {
 
         if validate_recording_seconds(config.recording_max_seconds).is_err() {
             config.recording_max_seconds = DEFAULT_RECORDING_SECONDS;
+        }
+
+        if config.recording_max_gib > MAX_RECORDING_GIB {
+            config.recording_max_gib = MAX_RECORDING_GIB;
+        } else if validate_recording_gib(config.recording_max_gib).is_err() {
+            config.recording_max_gib = DEFAULT_RECORDING_GIB;
         }
 
         if config.privacy.private_capture_names {
@@ -386,6 +423,7 @@ impl AppConfig {
         validate_lifetime(self.lifetime_seconds)?;
         validate_recording_fps(self.recording_fps)?;
         validate_recording_seconds(self.recording_max_seconds)?;
+        validate_recording_gib(self.recording_max_gib)?;
         anyhow::ensure!(
             self.behavior.save_captures || self.behavior.auto_upload_captures,
             "enable local capture copies or automatic capture uploads"
@@ -425,7 +463,7 @@ impl AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            uploader_kind: UploaderKind::Custom,
+            uploader_kind: UploaderKind::Uguu,
             uploader_url: String::new(),
             uploader_credentials: ProviderCredentials::default(),
             upload_header_name: String::new(),
@@ -434,6 +472,7 @@ impl Default for AppConfig {
             lifetime_seconds: DEFAULT_LIFETIME_SECONDS,
             recording_fps: DEFAULT_RECORDING_FPS,
             recording_max_seconds: DEFAULT_RECORDING_SECONDS,
+            recording_max_gib: DEFAULT_RECORDING_GIB,
             recording_format: RecordingFormat::default(),
             capture_directory: String::new(),
             capture_naming: CaptureNamingConfig::default(),
@@ -474,6 +513,7 @@ impl fmt::Debug for AppConfig {
             .field("lifetime_seconds", &self.lifetime_seconds)
             .field("recording_fps", &self.recording_fps)
             .field("recording_max_seconds", &self.recording_max_seconds)
+            .field("recording_max_gib", &self.recording_max_gib)
             .field("recording_format", &self.recording_format)
             .field("capture_directory", &self.capture_directory)
             .field("capture_naming", &self.capture_naming)
@@ -484,11 +524,23 @@ impl fmt::Debug for AppConfig {
     }
 }
 
-/// Human-readable bounded lifetime for status text.
+/// Human-readable requested lifetime for status text.
 #[must_use]
 pub fn display_lifetime(seconds: u32) -> String {
+    if seconds == 0 {
+        return "No expiry requested".to_owned();
+    }
+
+    if seconds.is_multiple_of(3_600) {
+        return match seconds / 3_600 {
+            1 => "1 hour".to_owned(),
+            24 => "1 day".to_owned(),
+            168 => "1 week".to_owned(),
+            hours => format!("{hours} hours"),
+        };
+    }
+
     match seconds {
-        3_600 => "1 hour".to_owned(),
         86_400 => "1 day".to_owned(),
         MAX_LIFETIME_SECONDS => "1 week".to_owned(),
         _ => format!("{seconds} seconds"),
@@ -504,6 +556,7 @@ mod tests {
         let config = AppConfig {
             uploader_credentials: ProviderCredentials {
                 imgur: "imgur-secret".to_owned(),
+                pixeldrain: "pixeldrain-secret".to_owned(),
                 vgy: "vgy-secret".to_owned(),
                 sul: "sul-secret".to_owned(),
             },
@@ -513,6 +566,12 @@ mod tests {
         assert_eq!(
             config.upload_target_for(UploaderKind::Imgur).credential,
             "imgur-secret"
+        );
+        assert_eq!(
+            config
+                .upload_target_for(UploaderKind::Pixeldrain)
+                .credential,
+            "pixeldrain-secret"
         );
         assert_eq!(
             config.upload_target_for(UploaderKind::Vgy).credential,
@@ -575,11 +634,17 @@ mod tests {
     }
 
     #[test]
-    fn new_configs_keep_captures_local_and_use_region_tray_clicks() {
+    fn new_configs_enable_uploads_and_sound_with_a_usable_provider() {
         let config = AppConfig::default();
 
         assert!(config.behavior.save_captures);
-        assert!(!config.behavior.auto_upload_captures);
+        assert!(config.behavior.auto_upload_captures);
+        assert_eq!(config.uploader_kind, UploaderKind::Uguu);
+        assert!(config.upload_target().validate().is_ok());
+        assert!(config.behavior.completion_sound);
+        assert!(config.behavior.copy_link_after_upload);
+        assert!(!config.behavior.onboarding_complete);
+        assert_eq!(config.recording_max_gib, crate::DEFAULT_RECORDING_GIB);
         assert_eq!(config.recording_format, RecordingFormat::Webp);
         assert!(config.shortcuts.clipboard.is_empty());
         assert_eq!(config.behavior.tray_click_action, TrayClickAction::Region);
@@ -596,19 +661,80 @@ mod tests {
     }
 
     #[test]
-    fn existing_configs_keep_webp_and_mp4_is_persisted_as_an_opt_in() {
-        let mut config = serde_json::from_str::<AppConfig>("{}").unwrap();
+    fn existing_configs_are_not_shown_the_first_run_setup_again() {
+        use crate::storage::{PlatformStorage, Storage as _};
 
-        assert_eq!(config.recording_format, RecordingFormat::Webp);
-        config.recording_format = RecordingFormat::Mp4;
-        let saved = serde_json::to_string(&config).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let storage = PlatformStorage::open_in(directory.path()).unwrap();
 
+        storage
+            .write(CONFIG_KEY, br#"{"completion_sound":false}"#)
+            .unwrap();
+
+        let config = AppConfig::load(&storage).unwrap();
+
+        assert!(config.behavior.onboarding_complete);
+        assert!(!config.behavior.completion_sound);
+        assert!(!config.behavior.auto_upload_captures);
+        assert_eq!(config.uploader_kind, UploaderKind::Custom);
+        assert!(config.behavior.copy_link_after_upload);
+    }
+
+    #[test]
+    fn loading_saved_preferences_preserves_explicit_choices_and_credentials() {
+        use crate::storage::PlatformStorage;
+
+        let directory = tempfile::tempdir().unwrap();
+        let storage = PlatformStorage::open_in(directory.path()).unwrap();
+        let mut saved = AppConfig::default();
+
+        saved.behavior.auto_upload_captures = false;
+        saved.behavior.completion_sound = false;
+        saved.behavior.onboarding_complete = true;
+        saved.uploader_kind = UploaderKind::Sul;
+        saved.uploader_credentials.sul = "fake-sul-key".to_owned();
+        saved.uploader_credentials.imgur = "fake-imgur-id".to_owned();
+        saved.upload_header_name = "Authorization".to_owned();
+        saved.upload_header_value = "fake-custom-key".to_owned();
+        saved.uploader_url = "https://uploads.example.test/upload".to_owned();
+        saved.upload_header_endpoint = Some(saved.uploader_url.clone());
+        saved.save(&storage).unwrap();
+
+        assert_eq!(AppConfig::load(&storage).unwrap(), saved);
+    }
+
+    #[test]
+    fn old_recording_limits_are_clamped_to_the_supported_container_limit() {
+        use crate::storage::{PlatformStorage, Storage as _};
+
+        let directory = tempfile::tempdir().unwrap();
+        let storage = PlatformStorage::open_in(directory.path()).unwrap();
+
+        storage
+            .write(CONFIG_KEY, br#"{"recording_max_gib":16}"#)
+            .unwrap();
         assert_eq!(
-            serde_json::from_str::<AppConfig>(&saved)
-                .unwrap()
-                .recording_format,
-            RecordingFormat::Mp4
+            AppConfig::load(&storage).unwrap().recording_max_gib,
+            MAX_RECORDING_GIB
         );
+        storage
+            .write(CONFIG_KEY, br#"{"recording_max_gib":0}"#)
+            .unwrap();
+        assert_eq!(
+            AppConfig::load(&storage).unwrap().recording_max_gib,
+            DEFAULT_RECORDING_GIB
+        );
+    }
+
+    #[test]
+    fn lifetimes_use_hours_and_days_in_status_text() {
+        assert_eq!(display_lifetime(0), "No expiry requested");
+        assert_eq!(display_lifetime(3_600), "1 hour");
+        assert_eq!(display_lifetime(7_200), "2 hours");
+        assert_eq!(display_lifetime(86_400), "1 day");
+        assert_eq!(display_lifetime(172_800), "48 hours");
+        assert_eq!(display_lifetime(604_800), "1 week");
+        assert_eq!(display_lifetime(90), "90 seconds");
     }
 
     #[test]

@@ -56,6 +56,31 @@ fn requires_escape(character: char) -> bool {
         )
 }
 
+/// Format a saved shortcut for compact display in action cards and fields.
+#[must_use]
+pub fn display_shortcut(value: &str) -> String {
+    if value.trim().is_empty() {
+        return "No shortcut".to_owned();
+    }
+
+    value
+        .split('+')
+        .map(|part| match part.to_ascii_lowercase().as_str() {
+            "control" | "ctrl" => "Ctrl".to_owned(),
+            "shift" => "Shift".to_owned(),
+            "alt" | "option" => "Alt".to_owned(),
+            "super" | "meta" | "command" | "cmd" => "Win".to_owned(),
+            "printscreen" | "print" => "PrtSc".to_owned(),
+            "return" | "enter" => "Enter".to_owned(),
+            "escape" | "esc" => "Esc".to_owned(),
+            "backspace" => "Backspace".to_owned(),
+            "delete" => "Delete".to_owned(),
+            _ => part.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +113,16 @@ mod tests {
             safe_text(&"x".repeat(MAX_DISPLAY_CHARACTERS)),
             Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn shortcuts_are_compact_but_keep_unknown_keys() {
+        assert_eq!(
+            display_shortcut("control+shift+PrintScreen"),
+            "Ctrl+Shift+PrtSc"
+        );
+        assert_eq!(display_shortcut("PrintScreen"), "PrtSc");
+        assert_eq!(display_shortcut(""), "No shortcut");
+        assert_eq!(display_shortcut("control+shift+v"), "Ctrl+Shift+v");
     }
 }

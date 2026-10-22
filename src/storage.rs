@@ -60,17 +60,31 @@ enum LocalPathState {
     NotRegular,
 }
 
+/// Resolve the directory that holds settings, history, and the instance lock.
+///
+/// # Errors
+///
+/// Returns an error when no configuration directory is available.
+pub fn config_directory() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SHARER_CONFIG_DIR").filter(|path| !path.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+
+    ProjectDirs::from("re", "", "sharer")
+        .map(|directories| directories.config_dir().to_owned())
+        .context("configuration directory unavailable")
+}
+
 impl PlatformStorage {
     /// Open the application's platform configuration database.
+    ///
+    /// Set `SHARER_CONFIG_DIR` to use a portable profile in a specific directory.
     ///
     /// # Errors
     ///
     /// Returns an error when no configuration directory is available or `SQLite` cannot open it.
     pub fn open() -> Result<Self> {
-        let directories =
-            ProjectDirs::from("re", "", "sharer").context("configuration directory unavailable")?;
-
-        Self::open_in(directories.config_dir())
+        Self::open_in(&config_directory()?)
     }
 
     /// Open a `ShareR` database in a specific directory.
@@ -189,6 +203,85 @@ impl PlatformStorage {
         Ok(self.connection.borrow().last_insert_rowid())
     }
 
+    /// Read a history record before starting an action on its local file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `SQLite` cannot read or decode the record.
+    pub fn history_entry(&self, id: i64) -> Result<Option<HistoryEntry>> {
+        self.connection
+            .borrow()
+            .query_row(
+                "SELECT id, created_at, original_name, size_bytes, link, delete_url, expires_at, local_path
+                 FROM upload_history WHERE id = ?1",
+                [id],
+                history_entry_from_row,
+            )
+            .optional()
+            .context("failed to read history entry")
+    }
+
+    /// Attach an upload receipt to an unchanged local-only record.
+    ///
+    /// Preserve a new receipt if its original record was changed or removed.
+    /// This avoids overwriting another row or losing returned deletion links.
+    /// Files on disk are never changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an ineligible original, an invalid receipt, or a database failure.
+    pub fn complete_history_upload(
+        &self,
+        original: &HistoryEntry,
+        uploaded: &mut HistoryEntry,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            original.link.is_empty() && !original.local_path.is_empty(),
+            "only local-only history entries can be uploaded"
+        );
+        anyhow::ensure!(
+            !uploaded.link.is_empty() && uploaded.local_path == original.local_path,
+            "history upload receipt must retain the original local path"
+        );
+        let original_size = i64::try_from(original.size_bytes)
+            .context("original size exceeds SQLite's integer range")?;
+        let uploaded_size = i64::try_from(uploaded.size_bytes)
+            .context("upload size exceeds SQLite's integer range")?;
+        let updated = self
+            .connection
+            .borrow()
+            .execute(
+                "UPDATE upload_history
+             SET original_name = ?1, size_bytes = ?2, link = ?3, delete_url = ?4, expires_at = ?5
+             WHERE id = ?6 AND created_at = ?7 AND original_name = ?8 AND size_bytes = ?9
+               AND link = '' AND delete_url = ?10 AND expires_at = ?11 AND local_path = ?12",
+                params![
+                    uploaded.filename,
+                    uploaded_size,
+                    uploaded.link,
+                    uploaded.delete_url,
+                    uploaded.expires_at,
+                    original.id,
+                    original.created_at,
+                    original.filename,
+                    original_size,
+                    original.delete_url,
+                    original.expires_at,
+                    original.local_path,
+                ],
+            )
+            .context("failed to update local capture history")?;
+
+        if updated == 0 {
+            uploaded.id = self.insert_history(uploaded)?;
+        } else {
+            uploaded.id = original.id;
+            uploaded.created_at = original.created_at;
+        }
+
+        Ok(())
+    }
+
     /// Load one newest-first page from the complete upload archive.
     ///
     /// # Errors
@@ -277,18 +370,7 @@ impl PlatformStorage {
             .prepare(query)
             .context("failed to prepare history page query")?;
         let rows = statement
-            .query_map(params![limit, offset], |row| {
-                Ok(HistoryEntry {
-                    id: row.get(0)?,
-                    created_at: row.get(1)?,
-                    filename: row.get(2)?,
-                    size_bytes: row.get(3)?,
-                    link: row.get(4)?,
-                    delete_url: row.get(5)?,
-                    expires_at: row.get(6)?,
-                    local_path: row.get(7)?,
-                })
-            })
+            .query_map(params![limit, offset], history_entry_from_row)
             .context("failed to query upload history")?;
         let mut entries = Vec::with_capacity(usize::try_from(limit).unwrap_or_default());
 
@@ -431,6 +513,19 @@ impl PlatformStorage {
 
         Ok(())
     }
+}
+
+fn history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        id: row.get(0)?,
+        created_at: row.get(1)?,
+        filename: row.get(2)?,
+        size_bytes: row.get(3)?,
+        link: row.get(4)?,
+        delete_url: row.get(5)?,
+        expires_at: row.get(6)?,
+        local_path: row.get(7)?,
+    })
 }
 
 fn classify_local_path(path: &Path) -> LocalPathState {

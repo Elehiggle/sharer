@@ -19,6 +19,7 @@ pub(super) fn show_missing(window: &AppWindow) {
             "MP4 recording needs FFmpeg. Download it from {} into ShareR's own folder? No PATH changes or administrator access are needed. To use WebP instead, cancel and turn off MP4 recording.",
             source.provider
         ),
+
         Err(error) => error.to_string(),
     };
 
@@ -127,6 +128,7 @@ fn finish(window: &AppWindow, cancelled: bool, result: Result<PathBuf>) {
                 window.set_status_text("FFmpeg ready".into());
                 window.set_status_detail("Press Record to start an MP4 recording".into());
             }
+
             Err(error) => {
                 window.set_ffmpeg_setup_message(format!("FFmpeg setup failed: {error:#}. Retry Download, or cancel and turn off MP4 to use WebP.").into());
                 window.set_status_text("FFmpeg setup failed".into());

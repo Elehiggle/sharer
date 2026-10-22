@@ -15,7 +15,7 @@ const STREAMED_FILE_SIZE: u64 = 16 * 1024 * 1024;
 #[test]
 fn lifetime_validation_does_not_allocate() {
     let allocations = measure(|| {
-        for seconds in [1, 60, 3600, 86_400, 604_800] {
+        for seconds in [0, 1, 60, 3600, 86_400, 604_800] {
             std::hint::black_box(validate_lifetime(seconds)).unwrap();
         }
     });

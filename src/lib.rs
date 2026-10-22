@@ -20,16 +20,22 @@ pub const MAX_RECORDING_FPS: u32 = 60;
 pub const MAX_RECORDING_SECONDS: u32 = 3_600;
 /// Default maximum duration of one region recording.
 pub const DEFAULT_RECORDING_SECONDS: u32 = 300;
+/// Smallest configurable output limit for a region recording, in GiB.
+pub const MIN_RECORDING_GIB: u32 = 1;
+/// Largest whole-GiB output limit below WebP's 32-bit RIFF size ceiling.
+pub const MAX_RECORDING_GIB: u32 = 3;
+/// Default output limit for one region recording, in GiB.
+pub const DEFAULT_RECORDING_GIB: u32 = 2;
 /// Largest history page returned by one database query.
 pub const MAX_HISTORY_PAGE_SIZE: usize = 1_000;
 
-/// Validate a remote file lifetime.
+/// Validate a remote file lifetime. Zero leaves retention to the server.
 ///
 /// # Errors
 ///
-/// Returns an error when the lifetime is zero or longer than one week.
+/// Returns an error when an explicit lifetime is longer than one week.
 pub fn validate_lifetime(seconds: u32) -> Result<u32, LifetimeError> {
-    if !(1..=MAX_LIFETIME_SECONDS).contains(&seconds) {
+    if seconds > MAX_LIFETIME_SECONDS {
         return Err(LifetimeError(seconds));
     }
 
@@ -38,7 +44,9 @@ pub fn validate_lifetime(seconds: u32) -> Result<u32, LifetimeError> {
 
 /// An invalid requested lifetime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("lifetime must be between 1 and {MAX_LIFETIME_SECONDS} seconds (one week), got {0}")]
+#[error(
+    "lifetime must be 0 (server default) or between 1 and {MAX_LIFETIME_SECONDS} seconds (one week), got {0}"
+)]
 pub struct LifetimeError(pub u32);
 
 /// Validate a region recording frame rate.
@@ -72,6 +80,24 @@ pub fn validate_recording_seconds(seconds: u32) -> Result<u32, RecordingDuration
 #[error("recording limit must be between 1 and {MAX_RECORDING_SECONDS} seconds, got {0}")]
 pub struct RecordingDurationError(u32);
 
+/// Validate the configured recording output bound.
+///
+/// # Errors
+///
+/// Returns an error when the limit is outside one through three GiB.
+pub fn validate_recording_gib(gib: u32) -> Result<u32, RecordingSizeError> {
+    if (MIN_RECORDING_GIB..=MAX_RECORDING_GIB).contains(&gib) {
+        Ok(gib)
+    } else {
+        Err(RecordingSizeError(gib))
+    }
+}
+
+/// An invalid recording size bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("recording size limit must be between 1 and {MAX_RECORDING_GIB} GiB, got {0}")]
+pub struct RecordingSizeError(u32);
+
 /// An invalid requested region recording frame rate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("recording frame rate must be between 1 and 60 fps, got {0}")]
@@ -83,6 +109,7 @@ mod tests {
 
     #[test]
     fn lifetime_accepts_bounds() {
+        assert_eq!(validate_lifetime(0), Ok(0));
         assert_eq!(validate_lifetime(1), Ok(1));
         assert_eq!(
             validate_lifetime(MAX_LIFETIME_SECONDS),
@@ -92,7 +119,6 @@ mod tests {
 
     #[test]
     fn lifetime_rejects_values_outside_bounds() {
-        assert_eq!(validate_lifetime(0), Err(LifetimeError(0)));
         assert_eq!(
             validate_lifetime(MAX_LIFETIME_SECONDS + 1),
             Err(LifetimeError(MAX_LIFETIME_SECONDS + 1))
@@ -116,6 +142,20 @@ mod tests {
         assert_eq!(
             validate_recording_seconds(3_601),
             Err(RecordingDurationError(3_601))
+        );
+    }
+
+    #[test]
+    fn recording_size_is_bounded() {
+        assert_eq!(validate_recording_gib(1), Ok(1));
+        assert_eq!(
+            validate_recording_gib(MAX_RECORDING_GIB),
+            Ok(MAX_RECORDING_GIB)
+        );
+        assert_eq!(validate_recording_gib(0), Err(RecordingSizeError(0)));
+        assert_eq!(
+            validate_recording_gib(MAX_RECORDING_GIB + 1),
+            Err(RecordingSizeError(MAX_RECORDING_GIB + 1))
         );
     }
 }

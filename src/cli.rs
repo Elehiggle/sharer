@@ -85,7 +85,9 @@ pub struct Cli {
     #[arg(long, requires = "history", value_name = "COUNT", default_value_t = 0)]
     pub history_offset: usize,
 
-    /// Custom-uploader deletion lifetime in seconds (maximum one week).
+    /// Custom-uploader deletion lifetime in seconds (1-604800); 0 requests no expiry.
+    ///
+    /// With 0, the server's own retention policy still applies.
     #[arg(long, value_parser = parse_lifetime, value_name = "SECONDS")]
     pub time: Option<u32>,
 
@@ -242,7 +244,9 @@ fn parse_history_limit(value: &str) -> Result<usize, CliHistoryLimitError> {
 enum CliLifetimeError {
     #[error("lifetime must be a whole number of seconds: {0}")]
     NotInteger(ParseIntError),
-    #[error("lifetime must be between 1 and {MAX_LIFETIME_SECONDS} seconds: {0}")]
+    #[error(
+        "lifetime must be 0 (server default) or between 1 and {MAX_LIFETIME_SECONDS} seconds: {0}"
+    )]
     OutOfRange(sharer::LifetimeError),
 }
 
@@ -272,6 +276,13 @@ mod tests {
         let error = Cli::try_parse_from(["sharer", "capture.png", "--time", "604801"]).unwrap_err();
 
         assert!(error.to_string().contains("between 1 and 604800"));
+    }
+
+    #[test]
+    fn accepts_no_requested_expiry() {
+        let cli = Cli::try_parse_from(["sharer", "capture.png", "--time", "0"]).unwrap();
+
+        assert_eq!(cli.time, Some(0));
     }
 
     #[test]

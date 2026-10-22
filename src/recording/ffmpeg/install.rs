@@ -45,26 +45,31 @@ fn source_for(os: &str, architecture: &str) -> Result<DownloadSource> {
             "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip",
             "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
         ),
+
         ("macos", "x86_64") => (
             "ffmpeg.martin-riedl.de",
             "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
             "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
         ),
+
         ("macos", "aarch64") => (
             "ffmpeg.martin-riedl.de",
             "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
             "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
         ),
+
         ("linux", "x86_64") => (
             "ffmpeg.martin-riedl.de",
             "https://ffmpeg.martin-riedl.de/download/linux/amd64/1789931100_9.0.2/ffmpeg.zip",
             "fa8ecf4abbd290d98f7d188b8649cc6b391ae209a98452be955a15aab1909d7f",
         ),
+
         ("linux", "aarch64") => (
             "ffmpeg.martin-riedl.de",
             "https://ffmpeg.martin-riedl.de/download/linux/arm64/1789931697_9.0.2/ffmpeg.zip",
             "93a76ae90db5474eecdf951a729857c64f3de23567228d6a7d5e6e8e3cd1021b",
         ),
+
         _ => anyhow::bail!(
             "Automatic FFmpeg download is not available for this platform or CPU; install FFmpeg manually"
         ),
@@ -170,6 +175,7 @@ async fn download(
     while let Some(chunk) = cancellable(response.chunk(), cancelled).await?? {
         writer.push(&chunk, cancelled)?;
         progress(writer.total, length);
+        tokio::task::yield_now().await;
     }
 
     anyhow::ensure!(
@@ -180,7 +186,10 @@ async fn download(
     Ok(())
 }
 
-async fn cancellable<F: Future>(future: F, cancelled: &AtomicBool) -> Result<F::Output> {
+async fn cancellable<F>(future: F, cancelled: &AtomicBool) -> Result<F::Output>
+where
+    F: Future,
+{
     check_cancelled(cancelled)?;
     let cancellation = async {
         while !cancelled.load(Ordering::Acquire) {
@@ -210,7 +219,10 @@ struct DownloadWriter<W> {
     hash: Sha256,
 }
 
-impl<W: Write> DownloadWriter<W> {
+impl<W> DownloadWriter<W>
+where
+    W: Write,
+{
     fn new(output: W, length: Option<u64>) -> Self {
         Self {
             output,
@@ -290,6 +302,7 @@ fn extract_executable(
             if count == 0 {
                 break;
             }
+
             written += u64::try_from(count)?;
             anyhow::ensure!(
                 written <= MAX_EXECUTABLE_BYTES,
@@ -359,6 +372,7 @@ fn validate_encoder(executable: &Path, cancelled: &AtomicBool) -> Result<()> {
         if let Err(error) = check_cancelled(cancelled) {
             break Err(error);
         }
+
         match child.try_wait() {
             Ok(Some(status)) => {
                 break if status.success() {
@@ -369,12 +383,16 @@ fn validate_encoder(executable: &Path, cancelled: &AtomicBool) -> Result<()> {
                     ))
                 };
             }
+
             Err(error) => break Err(error.into()),
+
             Ok(None) => {}
         }
+
         if started.elapsed() >= Duration::from_secs(10) {
             break Err(anyhow::anyhow!("downloaded FFmpeg validation timed out"));
         }
+
         thread::sleep(Duration::from_millis(20));
     };
 

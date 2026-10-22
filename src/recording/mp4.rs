@@ -16,14 +16,14 @@ use std::{
 use anyhow::{Context as _, Result};
 use tempfile::NamedTempFile;
 
-use super::{FrameWriter, MAX_RECORDING_BYTES};
+use super::{FrameWriter, UNEXPECTED_FRAME_SIZE};
 use sharer::capture::recording_frame_bytes;
 
 const ENCODER_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_DIAGNOSTIC_BYTES: usize = 8192;
 // FFmpeg's -fs can overshoot by a packet and final muxing data. Reject any
 // oversized result as well, so it can never enter the save/upload pipeline.
-const FILE_LIMIT: u64 = MAX_RECORDING_BYTES - 1024 * 1024;
+const FINALIZATION_RESERVE: u64 = 1024 * 1024;
 
 pub(super) struct Mp4Writer {
     dimensions: (u32, u32),
@@ -38,8 +38,17 @@ pub(super) struct Mp4Writer {
 }
 
 impl Mp4Writer {
-    pub(super) fn new(dimensions: (u32, u32), frames_per_second: u32) -> Result<Self> {
-        Self::with_limit(dimensions, frames_per_second, FILE_LIMIT)
+    pub(super) fn new(
+        dimensions: (u32, u32),
+        frames_per_second: u32,
+        max_bytes: u64,
+    ) -> Result<Self> {
+        let file_limit = max_bytes
+            .checked_sub(FINALIZATION_RESERVE)
+            .filter(|limit| *limit > 0)
+            .context("MP4 recording limit must exceed the finalization reserve")?;
+
+        Self::with_limit(dimensions, frames_per_second, file_limit)
     }
 
     fn with_limit(dimensions: (u32, u32), frames_per_second: u32, file_limit: u64) -> Result<Self> {
@@ -216,7 +225,7 @@ impl FrameWriter for Mp4Writer {
     fn add_rgba(&mut self, image: Vec<u8>, _timestamp: i32) -> Result<bool> {
         anyhow::ensure!(
             image.len() == recording_frame_bytes(self.dimensions)?,
-            "screen capture returned an unexpected recording size"
+            UNEXPECTED_FRAME_SIZE
         );
 
         if let Some(status) = self.child.try_wait()? {
@@ -276,13 +285,17 @@ impl FrameWriter for Mp4Writer {
             .take()
             .context("FFmpeg input worker unavailable")?
             .join()
-            .map_err(|_| anyhow::anyhow!("FFmpeg input worker stopped unexpectedly"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("FFmpeg input worker stopped unexpectedly: {error:?}")
+            })?;
         let diagnostic = self
             .diagnostic
             .take()
             .context("FFmpeg diagnostic worker unavailable")?
             .join()
-            .map_err(|_| anyhow::anyhow!("FFmpeg diagnostic worker stopped unexpectedly"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("FFmpeg diagnostic worker stopped unexpectedly: {error:?}")
+            })?;
 
         anyhow::ensure!(
             status.success(),
@@ -297,8 +310,8 @@ impl FrameWriter for Mp4Writer {
 
         anyhow::ensure!(length > 0, "FFmpeg produced an empty recording");
         anyhow::ensure!(
-            length <= MAX_RECORDING_BYTES,
-            "MP4 recording exceeds the 256 MiB file limit"
+            length <= self.file_limit + FINALIZATION_RESERVE,
+            "MP4 recording exceeds the configured file limit"
         );
         let mut output = self.output.take().context("MP4 output unavailable")?;
 
@@ -328,6 +341,7 @@ impl Drop for Mp4Writer {
 
         let _ = self.child.kill();
         let _ = self.child.wait();
+
         self.input.take();
 
         if let Some(writer) = self.writer.take() {
@@ -347,13 +361,16 @@ fn diagnostic_tail(mut reader: impl Read) -> String {
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
+
             Ok(count) => {
                 let excess = (tail.len() + count).saturating_sub(MAX_DIAGNOSTIC_BYTES);
 
                 tail.drain(..excess);
                 tail.extend_from_slice(&buffer[..count]);
             }
+
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+
             Err(_) => break,
         }
     }

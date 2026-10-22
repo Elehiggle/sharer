@@ -17,6 +17,17 @@ pub(super) fn windows_executable(executable: &str) -> Result<String> {
     Ok(format!("\"{executable}\""))
 }
 
+#[cfg(any(windows, test))]
+pub(super) fn windows_startup_approved(value: &[u8]) -> bool {
+    let Some(state) = value.get(..4).and_then(|bytes| bytes.try_into().ok()) else {
+        return false;
+    };
+
+    // StartupApproved stores state first, then a timestamp. A zero timestamp
+    // does not make a disabled entry enabled.
+    matches!(u32::from_le_bytes(state), 2 | 6)
+}
+
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn linux_argument(argument: &str) -> Result<String> {
     anyhow::ensure!(
@@ -44,6 +55,48 @@ pub(super) fn linux_argument(argument: &str) -> Result<String> {
     encoded.push('"');
 
     Ok(encoded)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_exec(executable: &str) -> Result<String> {
+    Ok(format!(
+        "/bin/sh -c {} ShareR {} --background",
+        linux_argument(LINUX_LAUNCH_SCRIPT)?,
+        linux_argument(executable)?
+    ))
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(super) fn linux_desktop_entry(executable: &str) -> Result<String> {
+    Ok(format!(
+        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=ShareR\n\
+         Comment=ShareR startup script\nExec={}\nStartupNotify=false\nTerminal=false\n",
+        linux_exec(executable)?
+    ))
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(super) fn linux_is_enabled(data: &str, executable: &str) -> Result<bool> {
+    let expected = linux_exec(executable)?;
+    let mut in_entry = false;
+    let mut command_matches = false;
+    let mut enabled = true;
+
+    for line in data.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_entry = line == "[Desktop Entry]";
+        } else if in_entry && let Some((key, value)) = line.split_once('=') {
+            match key.trim() {
+                "Exec" => command_matches = value.trim() == expected,
+                "Hidden" => enabled &= value.trim() != "true",
+                "X-GNOME-Autostart-enabled" => enabled &= value.trim() != "false",
+                "Type" => enabled &= value.trim() == "Application",
+                _ => {}
+            }
+        }
+    }
+
+    Ok(command_matches && enabled)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -89,134 +142,73 @@ pub(super) fn launch_agent(executable: &str) -> Result<String> {
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{LINUX_LAUNCH_SCRIPT, launch_agent, linux_argument, windows_executable};
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn launch_agent_is_enabled(data: &str, executable: &str) -> bool {
+    // Apple's plist tools emit a public DOCTYPE. Allow it without installing an
+    // external entity resolver; reading a startup entry must never fetch a DTD.
+    let options = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..roxmltree::ParsingOptions::default()
+    };
+    let Ok(document) = roxmltree::Document::parse_with_options(data, options) else {
+        return false;
+    };
+    let root = document.root_element();
+    let mut values = root.children().filter(roxmltree::Node::is_element);
+    let Some(dictionary) = values.next() else {
+        return false;
+    };
 
-    #[test]
-    fn windows_keeps_the_complete_executable_as_the_first_argument() {
-        for executable in [
-            r"C:\ShareR\ShareR.exe",
-            r"C:\Program Files\ShareR\ShareR.exe",
-            r"\\?\C:\ShareR & <100%>\ShareR.exe",
-        ] {
-            assert_eq!(
-                windows_executable(executable).unwrap(),
-                format!("\"{executable}\""),
-                "Windows must quote the executable without changing its backslashes"
-            );
-        }
-
-        assert!(
-            windows_executable("C:\\bad\" --other.exe").is_err(),
-            "a quote cannot occur in a Windows executable filename"
-        );
-        assert!(
-            windows_executable("C:\\bad\0.exe").is_err(),
-            "NUL must not truncate the executable path"
-        );
+    if !root.has_tag_name("plist") || !dictionary.has_tag_name("dict") || values.next().is_some() {
+        return false;
     }
 
-    #[test]
-    fn linux_escapes_both_desktop_entry_layers_and_literal_field_codes() {
-        let cases = [
-            ("/opt/ShareR", r#""/opt/ShareR""#),
-            ("/opt/Share R/ShareR", r#""/opt/Share R/ShareR""#),
-            ("/opt/\"ShareR\"", r#""/opt/\\"ShareR\\"""#),
-            (r"/opt/Share\R", r#""/opt/Share\\\\R""#),
-            ("/opt/Share%f & <R>", r#""/opt/Share%%f & <R>""#),
-            ("/opt/$Share`R'", r#""/opt/\\$Share\\`R'""#),
-            ("/opt/Share=R", r#""/opt/Share=R""#),
-            ("/opt/Share%f= R & <x>", r#""/opt/Share%%f= R & <x>""#),
-            (LINUX_LAUNCH_SCRIPT, r#""exec \\"\\$@\\"""#),
-        ];
+    let mut nodes = dictionary.children().filter(roxmltree::Node::is_element);
+    let mut command_matches = false;
+    let mut run_at_load = false;
+    let mut label_matches = false;
+    let mut disabled = false;
+    let mut program_matches = true;
 
-        for (executable, expected) in cases {
-            assert_eq!(
-                linux_argument(executable).unwrap(),
-                expected,
-                "the desktop entry must preserve the exact executable path"
-            );
+    while let Some(key) = nodes.next() {
+        let Some(value) = nodes.next() else {
+            return false;
+        };
+
+        if !key.has_tag_name("key") {
+            return false;
         }
 
-        for executable in ["/opt/Share\nR", "/opt/Share\0R"] {
-            assert!(
-                linux_argument(executable).is_err(),
-                "paths unsupported by the desktop entry format must fail explicitly"
-            );
-        }
-    }
+        match key.text() {
+            Some("Label") => {
+                label_matches = value.has_tag_name("string") && value.text() == Some("ShareR");
+            }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_launcher_preserves_paths_without_evaluating_shell_syntax() {
-        use std::os::unix::fs::PermissionsExt as _;
+            Some("Program") => {
+                program_matches = value.has_tag_name("string") && value.text() == Some(executable);
+            }
 
-        let directory = tempfile::tempdir().unwrap();
-        let names = [
-            "Share=R",
-            "Share%f= R & <x>",
-            r#"Share "quoted" 'single' \ `touch injected` $(touch injected); & <x> %f="#,
-        ];
+            Some("RunAtLoad") => run_at_load = value.has_tag_name("true"),
 
-        for name in names {
-            let executable = directory.path().join(name);
+            Some("Disabled") => disabled = value.has_tag_name("true"),
 
-            std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\"\n").unwrap();
-            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            Some("ProgramArguments") if value.has_tag_name("array") => {
+                let mut arguments = value.children().filter(roxmltree::Node::is_element);
 
-            let output = std::process::Command::new("/bin/sh")
-                .args(["-c", LINUX_LAUNCH_SCRIPT, "ShareR"])
-                .arg(&executable)
-                .arg("--background")
-                .current_dir(directory.path())
-                .output()
-                .unwrap();
+                command_matches = arguments.next().is_some_and(|argument| {
+                    argument.has_tag_name("string") && argument.text() == Some(executable)
+                }) && arguments.next().is_some_and(|argument| {
+                    argument.has_tag_name("string") && argument.text() == Some("--background")
+                }) && arguments.next().is_none();
+            }
 
-            assert!(output.status.success(), "the exact executable must launch");
-            assert_eq!(
-                String::from_utf8(output.stdout).unwrap(),
-                format!("{}\n--background\n", executable.display()),
-                "the shell must preserve the executable and background argument"
-            );
-            assert!(
-                !directory.path().join("injected").exists(),
-                "shell syntax from the path must never be evaluated"
-            );
+            _ => {}
         }
     }
 
-    #[test]
-    fn macos_keeps_a_single_xml_string_for_the_executable() {
-        let executable = "/Applications/Share R & <x> \"quoted\" 'single' \\ 100%/ShareR";
-        let data = launch_agent(executable).unwrap();
-
-        assert!(
-            data.contains(
-                "<array><string>/Applications/Share R &amp; &lt;x&gt; &quot;quoted&quot; \
-                 &apos;single&apos; \\ 100%/ShareR</string><string>--background</string></array>"
-            ),
-            "XML markup in the filename must stay within the executable string"
-        );
-        assert!(
-            data.contains("<key>Label</key><string>ShareR</string>"),
-            "the existing registration label must stay compatible with disable/status"
-        );
-        assert!(
-            launch_agent("/Applications/ShareR").unwrap().contains(
-                "<array><string>/Applications/ShareR</string><string>--background</string></array>"
-            ),
-            "ordinary executable paths must be preserved"
-        );
-        assert!(
-            launch_agent("/Share\t\n\rR")
-                .unwrap()
-                .contains("/Share&#9;&#10;&#13;R"),
-            "XML whitespace normalization must not alter the path"
-        );
-        assert!(
-            launch_agent("/Share\0R").is_err(),
-            "invalid XML characters must fail before writing the registration"
-        );
-    }
+    label_matches && program_matches && command_matches && run_at_load && !disabled
 }
+
+#[cfg(test)]
+#[path = "format_tests.rs"]
+mod tests;

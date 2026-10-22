@@ -86,9 +86,11 @@ fn keyboard_navigation_stays_in_the_setup_dialog() {
 
     press(Key::Return);
     assert_eq!(downloads.get(), 1);
+
     for _ in 0..5 {
         press(Key::Tab);
     }
+
     press(Key::Return);
     assert_eq!(cancellations.get(), 1);
     press(Key::Escape);

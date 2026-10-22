@@ -69,19 +69,18 @@ fn is_executable(path: &Path) -> bool {
 
 fn standard_directories() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
-    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-        .map(PathBuf::from)
-        .into();
+    {
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+            .map(PathBuf::from)
+            .into()
+    }
 
     #[cfg(target_os = "linux")]
-    return [
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-        "/home/linuxbrew/.linuxbrew/bin",
-    ]
-    .map(PathBuf::from)
-    .into();
+    {
+        ["/usr/local/bin", "/usr/bin", "/bin"]
+            .map(PathBuf::from)
+            .into()
+    }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     Vec::new()

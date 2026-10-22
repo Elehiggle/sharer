@@ -8,11 +8,14 @@ use std::{
 };
 
 use super::{MAX_DIAGNOSTIC_BYTES, Mp4Writer, diagnostic_tail};
+
 use crate::recording::{FrameWriter, RecordingCallbacks, RecordingSettings, record_frames};
 use sharer::{
     config::{CaptureResolution, RecordingFormat},
     upload::UploadPayload,
 };
+
+const TEST_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 fn assert_decodable(path: &Path) {
     let decode = Command::new("ffmpeg")
@@ -44,7 +47,7 @@ fn diagnostics_keep_only_a_bounded_tail() {
 #[ignore = "requires FFmpeg with libx264 and ffprobe on PATH"]
 fn slow_capture_produces_a_playable_mp4_with_elapsed_timing_and_cleanup() {
     let dimensions = (65, 49);
-    let writer = Mp4Writer::new(dimensions, 30).unwrap();
+    let writer = Mp4Writer::new(dimensions, 30, TEST_MAX_BYTES).unwrap();
     let (_sender, receiver) = mpsc::channel();
     let started = Instant::now();
     let recording = record_frames(
@@ -52,6 +55,7 @@ fn slow_capture_produces_a_playable_mp4_with_elapsed_timing_and_cleanup() {
         &receiver,
         RecordingSettings {
             frames_per_second: 30,
+            max_bytes: TEST_MAX_BYTES,
             max_seconds: 1,
             capture_resolution: CaptureResolution::Native,
             format: RecordingFormat::Mp4,
@@ -133,7 +137,7 @@ fn slow_capture_produces_a_playable_mp4_with_elapsed_timing_and_cleanup() {
 #[test]
 #[ignore = "requires FFmpeg with libx264 on PATH"]
 fn early_capture_failure_terminates_ffmpeg_and_removes_temporary_output() {
-    let writer = Mp4Writer::new((64, 48), 30).unwrap();
+    let writer = Mp4Writer::new((64, 48), 30, TEST_MAX_BYTES).unwrap();
     let temporary_path = writer.output.as_ref().unwrap().path().to_owned();
     let (_sender, receiver) = mpsc::channel();
     let started = Instant::now();
@@ -142,6 +146,7 @@ fn early_capture_failure_terminates_ffmpeg_and_removes_temporary_output() {
         &receiver,
         RecordingSettings {
             frames_per_second: 30,
+            max_bytes: TEST_MAX_BYTES,
             max_seconds: 1,
             capture_resolution: CaptureResolution::Native,
             format: RecordingFormat::Mp4,
@@ -160,7 +165,7 @@ fn early_capture_failure_terminates_ffmpeg_and_removes_temporary_output() {
 #[test]
 #[ignore = "requires FFmpeg with libx264 on PATH"]
 fn stopping_immediately_still_finishes_the_first_frame() {
-    let writer = Mp4Writer::new((64, 48), 30).unwrap();
+    let writer = Mp4Writer::new((64, 48), 30, TEST_MAX_BYTES).unwrap();
     let (sender, receiver) = mpsc::channel();
 
     sender.send(()).unwrap();
@@ -169,6 +174,7 @@ fn stopping_immediately_still_finishes_the_first_frame() {
         &receiver,
         RecordingSettings {
             frames_per_second: 30,
+            max_bytes: TEST_MAX_BYTES,
             max_seconds: 60,
             capture_resolution: CaptureResolution::Native,
             format: RecordingFormat::Mp4,
@@ -181,7 +187,7 @@ fn stopping_immediately_still_finishes_the_first_frame() {
     .unwrap();
 
     assert!(recording.length > 0);
-    let mut writer = Mp4Writer::new((64, 48), 30).unwrap();
+    let mut writer = Mp4Writer::new((64, 48), 30, TEST_MAX_BYTES).unwrap();
 
     assert!(writer.add_rgba(vec![0; 3], 0).is_err());
 }
@@ -189,7 +195,8 @@ fn stopping_immediately_still_finishes_the_first_frame() {
 #[test]
 #[ignore = "requires FFmpeg with libx264 on PATH"]
 fn file_limit_finishes_a_playable_partial_recording() {
-    let writer = Mp4Writer::with_limit((256, 256), 30, 64 * 1024).unwrap();
+    let max_bytes = 2 * 1024 * 1024;
+    let writer = Mp4Writer::new((256, 256), 30, max_bytes).unwrap();
     let (_sender, receiver) = mpsc::channel();
     let mut random = 1_u32;
     let recording = record_frames(
@@ -197,6 +204,7 @@ fn file_limit_finishes_a_playable_partial_recording() {
         &receiver,
         RecordingSettings {
             frames_per_second: 30,
+            max_bytes,
             max_seconds: 10,
             capture_resolution: CaptureResolution::Native,
             format: RecordingFormat::Mp4,
@@ -221,8 +229,8 @@ fn file_limit_finishes_a_playable_partial_recording() {
     .unwrap();
 
     assert!(recording.stopped_at_limit);
-    assert!(recording.length >= 64 * 1024);
-    assert!(recording.length < 2 * 1024 * 1024);
+    assert!(recording.length >= 1024 * 1024);
+    assert!(recording.length <= max_bytes);
     assert_decodable(recording.output.path());
 }
 
@@ -248,6 +256,7 @@ fn live_desktop_capture_saves_a_playable_mp4() {
         "desktop-smoke",
         RecordingSettings {
             frames_per_second: 30,
+            max_bytes: TEST_MAX_BYTES,
             max_seconds: 10,
             capture_resolution: CaptureResolution::Native,
             format: RecordingFormat::Mp4,

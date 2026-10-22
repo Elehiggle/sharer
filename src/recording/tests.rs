@@ -9,15 +9,18 @@ use std::{
 use webp_animation::Decoder;
 
 use super::{
-    MAX_RECORDING_BYTES, RecordingCallbacks, RecordingSettings, duration_timestamp, encode_frame,
-    record_frames, webp::WebpWriter,
+    RecordingCallbacks, RecordingSettings, duration_timestamp, encode_frame, record_frames,
+    webp::WebpWriter,
 };
 use sharer::config::{CaptureResolution, RecordingFormat};
+
+const TEST_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 fn settings() -> RecordingSettings {
     RecordingSettings {
         frames_per_second: 60,
         max_seconds: 1,
+        max_bytes: TEST_MAX_BYTES,
         capture_resolution: CaptureResolution::Native,
         format: RecordingFormat::Webp,
     }
@@ -50,8 +53,7 @@ fn timestamps_use_real_elapsed_milliseconds() {
 #[test]
 fn muxed_frames_preserve_alpha_pixels_and_real_durations() {
     let dimensions = (3, 2);
-    let mut writer =
-        WebpWriter::new(Cursor::new(Vec::new()), dimensions, MAX_RECORDING_BYTES).unwrap();
+    let mut writer = WebpWriter::new(Cursor::new(Vec::new()), dimensions, TEST_MAX_BYTES).unwrap();
     let mut expected_pixels = Vec::new();
 
     for (timestamp, pixel) in [
@@ -91,7 +93,7 @@ fn optimized_sparse_frames_preserve_the_full_independent_canvas() {
         let dimensions = (size, size);
         let pixels = usize::try_from(size * size).unwrap();
         let mut writer =
-            WebpWriter::new(Cursor::new(Vec::new()), dimensions, MAX_RECORDING_BYTES).unwrap();
+            WebpWriter::new(Cursor::new(Vec::new()), dimensions, TEST_MAX_BYTES).unwrap();
         let mut expected_pixels = Vec::new();
 
         for (index, crop) in [None, Some((size / 2, size / 2)), Some((2, 6)), None]
@@ -149,8 +151,7 @@ fn optimized_sparse_frames_preserve_the_full_independent_canvas() {
 fn output_budget_keeps_a_valid_complete_first_frame() {
     let dimensions = (2, 2);
     let encoded = encode_frame(dimensions, &[255; 16]).unwrap();
-    let mut probe =
-        WebpWriter::new(Cursor::new(Vec::new()), dimensions, MAX_RECORDING_BYTES).unwrap();
+    let mut probe = WebpWriter::new(Cursor::new(Vec::new()), dimensions, TEST_MAX_BYTES).unwrap();
 
     assert!(probe.add_frame(&encoded, 0).unwrap());
     let (_, first_length) = probe.finish(20).unwrap();
@@ -172,8 +173,7 @@ fn output_budget_keeps_a_valid_complete_first_frame() {
 fn budget_stop_preserves_frames_and_reports_the_limit() {
     let dimensions = (2, 2);
     let encoded = encode_frame(dimensions, &[255; 16]).unwrap();
-    let mut probe =
-        WebpWriter::new(Cursor::new(Vec::new()), dimensions, MAX_RECORDING_BYTES).unwrap();
+    let mut probe = WebpWriter::new(Cursor::new(Vec::new()), dimensions, TEST_MAX_BYTES).unwrap();
 
     assert!(probe.add_frame(&encoded, 0).unwrap());
     let (_, first_length) = probe.finish(20).unwrap();
@@ -205,7 +205,7 @@ fn budget_stop_preserves_frames_and_reports_the_limit() {
 
 #[test]
 fn requested_stop_keeps_repeated_frames_and_timing() {
-    let writer = WebpWriter::new(Cursor::new(Vec::new()), (2, 2), MAX_RECORDING_BYTES).unwrap();
+    let writer = WebpWriter::new(Cursor::new(Vec::new()), (2, 2), TEST_MAX_BYTES).unwrap();
     let (sender, receiver) = mpsc::channel();
     let mut captures = 0;
     let animation = record_frames(
@@ -233,13 +233,13 @@ fn requested_stop_keeps_repeated_frames_and_timing() {
     assert_eq!(captures, 2);
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[0].data(), frames[1].data());
-    assert_eq!(frames[0].timestamp(), 200);
-    assert_eq!(frames[1].timestamp(), 400);
+    assert_eq!(frames[0].timestamp(), 300);
+    assert_eq!(frames[1].timestamp(), 500);
 }
 
 #[test]
 fn duration_limit_stops_without_a_stop_message() {
-    let writer = WebpWriter::new(Cursor::new(Vec::new()), (2, 2), MAX_RECORDING_BYTES).unwrap();
+    let writer = WebpWriter::new(Cursor::new(Vec::new()), (2, 2), TEST_MAX_BYTES).unwrap();
     let (_sender, receiver) = mpsc::channel();
     let mut captures = 0;
     let animation = record_frames(
@@ -261,13 +261,43 @@ fn duration_limit_stops_without_a_stop_message() {
     assert_eq!(captures, 5);
     let bytes = animation.output.into_inner();
 
-    assert_eq!(Decoder::new(&bytes).unwrap().into_iter().count(), 5);
+    let frames: Vec<_> = Decoder::new(&bytes).unwrap().into_iter().collect();
+
+    assert_eq!(frames.len(), 5);
+    assert_eq!(frames.last().unwrap().timestamp(), 1_000);
+}
+
+#[test]
+fn slow_first_capture_still_finishes_within_the_duration_limit() {
+    let writer = WebpWriter::new(Cursor::new(Vec::new()), (2, 2), TEST_MAX_BYTES).unwrap();
+    let (_sender, receiver) = mpsc::channel();
+    let started = Instant::now();
+    let elapsed = std::cell::Cell::new(Duration::ZERO);
+    let animation = record_frames(
+        writer,
+        &receiver,
+        settings(),
+        RecordingCallbacks {
+            now: || started + elapsed.get(),
+            capture: || {
+                elapsed.set(Duration::from_secs(10));
+
+                Ok(vec![255; 16])
+            },
+        },
+    )
+    .unwrap();
+    let bytes = animation.output.into_inner();
+    let frames: Vec<_> = Decoder::new(&bytes).unwrap().into_iter().collect();
+
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].timestamp(), 1_000);
 }
 
 #[test]
 fn temporary_recording_remains_readable_until_owned_file_is_dropped() {
     let mut writer =
-        WebpWriter::new(tempfile::tempfile().unwrap(), (2, 2), MAX_RECORDING_BYTES).unwrap();
+        WebpWriter::new(tempfile::tempfile().unwrap(), (2, 2), TEST_MAX_BYTES).unwrap();
     let encoded = encode_frame((2, 2), &[255; 16]).unwrap();
 
     assert!(writer.add_frame(&encoded, 0).unwrap());
@@ -286,8 +316,7 @@ fn invalid_sizes_and_timestamps_fail_before_finishing() {
     assert!(encode_frame((16_383, 16_383), &[]).is_err());
     assert!(encode_frame(dimensions, &[0; 12]).is_err());
     let encoded = encode_frame(dimensions, &[255; 16]).unwrap();
-    let mut writer =
-        WebpWriter::new(Cursor::new(Vec::new()), dimensions, MAX_RECORDING_BYTES).unwrap();
+    let mut writer = WebpWriter::new(Cursor::new(Vec::new()), dimensions, TEST_MAX_BYTES).unwrap();
 
     assert!(writer.add_frame(&encoded, 100).unwrap());
     assert!(writer.add_frame(&encoded, 100).is_err());

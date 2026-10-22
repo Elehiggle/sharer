@@ -22,6 +22,7 @@ use sharer::{
 const PAGE_SIZE: usize = 25;
 
 pub(crate) type LocalDeletionObserver = Rc<dyn Fn(&AppWindow, i64, &Path)>;
+pub(crate) type HistoryRemovalObserver = Rc<dyn Fn(&AppWindow, i64)>;
 
 pub(crate) struct HistoryController {
     local_deleted: LocalDeletionObserver,
@@ -38,6 +39,7 @@ pub(crate) fn initialize(
     storage: &Rc<PlatformStorage>,
     suspended: bool,
     local_deleted: &LocalDeletionObserver,
+    history_removed: &HistoryRemovalObserver,
 ) -> Result<Rc<RefCell<HistoryController>>> {
     let rows = Rc::new(VecModel::default());
     let controller = Rc::new(RefCell::new(HistoryController {
@@ -58,7 +60,7 @@ pub(crate) fn initialize(
         refresh(window, storage, &controller, 0)?;
     }
 
-    wire_callbacks(window, storage, &controller, local_deleted);
+    wire_callbacks(window, storage, &controller, local_deleted, history_removed);
 
     Ok(controller)
 }
@@ -116,7 +118,7 @@ fn wire_sort_callback(
         if let Some(window) = window_weak.upgrade()
             && let Err(error) = refresh_with_sort(&window, &storage, &controller, 0, sort)
         {
-            window.set_status_detail(format!("Could not sort history: {error:#}").into());
+            set_action_status(&window, format!("Could not sort history: {error:#}"), true);
         }
     });
 }
@@ -126,11 +128,12 @@ fn wire_callbacks(
     storage: &Rc<PlatformStorage>,
     controller: &Rc<RefCell<HistoryController>>,
     local_deleted: &LocalDeletionObserver,
+    history_removed: &HistoryRemovalObserver,
 ) {
     wire_sort_callback(window, storage, controller);
     wire_link_callbacks(window, controller);
     wire_local_file_callbacks(window, controller);
-    wire_removal_callbacks(window, storage, controller, local_deleted);
+    wire_removal_callbacks(window, storage, controller, local_deleted, history_removed);
     wire_pagination_callbacks(window, storage, controller);
 }
 
@@ -150,7 +153,7 @@ fn wire_link_callbacks(window: &AppWindow, controller: &Rc<RefCell<HistoryContro
         if let Err(error) = open::that(row.link.as_str())
             && let Some(window) = window_weak.upgrade()
         {
-            window.set_status_detail(format!("Could not open link: {error}").into());
+            set_action_status(&window, format!("Could not open link: {error}"), true);
         }
     });
 
@@ -177,6 +180,42 @@ fn wire_link_callbacks(window: &AppWindow, controller: &Rc<RefCell<HistoryContro
             true,
         );
     });
+
+    let window_weak = window.as_weak();
+    let controller_for_open_delete = Rc::clone(controller);
+
+    window.on_open_history_delete(move |action_token| {
+        let Some(row) = row_by_token(&controller_for_open_delete, action_token.as_str()) else {
+            return;
+        };
+
+        if row.delete_link.is_empty() || !confirm_deletion_page() {
+            return;
+        }
+
+        let result = open::that(row.delete_link.as_str());
+        let detail = deletion_page_status(&result);
+
+        if let Some(window) = window_weak.upgrade() {
+            set_action_status(&window, detail, result.is_err());
+        }
+    });
+}
+
+pub(crate) fn confirm_deletion_page() -> bool {
+    confirm(
+        "Open the deletion page?",
+        "This opens the host's deletion page in your browser. The uploaded file may be deleted immediately and cannot be restored. The local copy and history entry stay.",
+    )
+}
+
+pub(crate) fn deletion_page_status(result: &std::io::Result<()>) -> &'static str {
+    if result.is_ok() {
+        "Opened deletion page in the browser"
+    } else {
+        // Launcher errors can contain command arguments, including the secret capability URL.
+        "Could not open the deletion page. Copy its link and open it in your browser."
+    }
 }
 
 fn wire_local_file_callbacks(window: &AppWindow, controller: &Rc<RefCell<HistoryController>>) {
@@ -247,10 +286,12 @@ fn wire_removal_callbacks(
     storage: &Rc<PlatformStorage>,
     controller: &Rc<RefCell<HistoryController>>,
     local_deleted: &LocalDeletionObserver,
+    history_removed: &HistoryRemovalObserver,
 ) {
     let window_weak = window.as_weak();
     let storage_for_remove = Rc::clone(storage);
     let controller_for_remove = Rc::clone(controller);
+    let history_removed = Rc::clone(history_removed);
 
     window.on_remove_history_entry(move |action_token| {
         let Some(row) = row_by_token(&controller_for_remove, action_token.as_str()) else {
@@ -262,14 +303,16 @@ fn wire_removal_callbacks(
 
         if !confirm(
             "Remove history entry?",
-            "This removes the record from ShareR history. Local and remote files are not deleted.",
+            "This removes the record and its saved links from ShareR history, including the deletion link. Local and uploaded files are not deleted. Copy the deletion link first if you may need it later.",
         ) {
             return;
         }
 
-        let result = history_id(&row)
-            .and_then(|id| storage_for_remove.remove_history(id))
-            .and_then(|()| refresh_current(&window, &storage_for_remove, &controller_for_remove));
+        let result = history_id(&row).and_then(|id| {
+            storage_for_remove.remove_history(id)?;
+            history_removed(&window, id);
+            refresh_current(&window, &storage_for_remove, &controller_for_remove)
+        });
 
         set_action_result(&window, result.map(|()| "History entry removed".to_owned()));
     });
@@ -288,8 +331,8 @@ fn wire_removal_callbacks(
         };
 
         if !confirm(
-            "Delete local capture?",
-            "This permanently deletes the local file. Any uploaded copy is unchanged.",
+            "Delete local file permanently?",
+            "This permanently deletes the local file from disk, without using the Recycle Bin or Trash. The uploaded copy and history entry stay.",
         ) {
             return;
         }
@@ -304,14 +347,15 @@ fn wire_removal_callbacks(
                 clear_persisted: |id| storage_for_delete_local.clear_history_local_path(id),
             },
         ) {
-            Ok(None) => window.set_status_detail("Local capture deleted".into()),
+            Ok(None) => set_action_status(&window, "Local capture deleted", false),
 
-            Ok(Some(error)) => window.set_status_detail(
+            Ok(Some(error)) => set_action_status(
+                &window,
                 format!(
                     "Local capture deleted, but its history record could not be updated. \
                      ShareR will reconcile it when this page reloads: {error:#}"
-                )
-                .into(),
+                ),
+                true,
             ),
 
             Err(error) => set_action_result(&window, Err(error)),
@@ -339,7 +383,7 @@ fn wire_pagination_callbacks(
                 page,
             )
         {
-            window.set_status_detail(format!("Could not load history: {error:#}").into());
+            set_action_status(&window, format!("Could not load history: {error:#}"), true);
         }
     });
 
@@ -353,7 +397,7 @@ fn wire_pagination_callbacks(
         if let Some(window) = window_weak.upgrade()
             && let Err(error) = refresh(&window, &storage_for_next, &controller_for_next, page)
         {
-            window.set_status_detail(format!("Could not load history: {error:#}").into());
+            set_action_status(&window, format!("Could not load history: {error:#}"), true);
         }
     });
 }
@@ -491,6 +535,35 @@ fn row_by_token(controller: &RefCell<HistoryController>, action_token: &str) -> 
         .find(|row| row.action_token == action_token)
 }
 
+pub(crate) fn local_upload_entry(
+    storage: &PlatformStorage,
+    controller: &RefCell<HistoryController>,
+    action_token: &str,
+) -> Result<HistoryEntry> {
+    let row = row_by_token(controller, action_token)
+        .context("history changed; select the local file again")?;
+
+    anyhow::ensure!(
+        row.link.is_empty(),
+        "this entry already has an uploaded link"
+    );
+    anyhow::ensure!(!row.local_path.is_empty(), "this entry has no local file");
+    let entry = storage
+        .history_entry(history_id(&row)?)?
+        .context("history entry no longer exists")?;
+
+    anyhow::ensure!(
+        entry.link.is_empty() && entry.local_path == row.local_path.as_str(),
+        "history entry changed; select the local file again"
+    );
+    anyhow::ensure!(
+        Path::new(&entry.local_path).is_file(),
+        "local capture no longer exists or is not a file"
+    );
+
+    Ok(entry)
+}
+
 fn clear_local_row(controller: &RefCell<HistoryController>, entry_id: &str) {
     let controller = controller.borrow();
     let Some(index) = controller
@@ -566,12 +639,12 @@ fn copy_row_value(
     let result = sharer::clipboard::copy_link(value.as_str());
 
     if let Some(window) = window.upgrade() {
-        let detail = match result {
-            Ok(()) => SharedString::from(format!("{description} copied to clipboard")),
-            Err(error) => SharedString::from(format!("Could not copy {description}: {error:#}")),
+        let detail = match &result {
+            Ok(()) => format!("{description} copied to clipboard"),
+            Err(error) => format!("Could not copy {description}: {error:#}"),
         };
 
-        window.set_status_detail(detail);
+        set_action_status(&window, detail, result.is_err());
     }
 }
 
@@ -583,7 +656,11 @@ fn row_from_entry(entry: &HistoryEntry, generation: u64) -> HistoryRow {
         filename: safe_text(&entry.filename).as_ref().into(),
         size: format_size(entry.size_bytes).into(),
         expires: if entry.expires_at.is_empty() {
-            "Local only".into()
+            if entry.link.is_empty() {
+                "Local only".into()
+            } else {
+                "Retention set by host".into()
+            }
         } else {
             safe_text(&entry.expires_at).as_ref().into()
         },
@@ -640,9 +717,14 @@ fn history_id(row: &HistoryRow) -> Result<i64> {
 
 fn set_action_result(window: &AppWindow, result: Result<String>) {
     match result {
-        Ok(detail) => window.set_status_detail(detail.into()),
-        Err(error) => window.set_status_detail(format!("History action failed: {error:#}").into()),
+        Ok(detail) => set_action_status(window, detail, false),
+        Err(error) => set_action_status(window, format!("{error:#}"), true),
     }
+}
+
+pub(crate) fn set_action_status(window: &AppWindow, detail: impl Into<SharedString>, failed: bool) {
+    window.set_history_action_detail(detail.into());
+    window.set_history_action_failed(failed);
 }
 
 fn confirm(title: &str, description: &str) -> bool {
@@ -720,15 +802,54 @@ mod tests {
     use crate::HistoryRow;
 
     use super::{
-        DeleteLocalCallbacks, delete_local_capture, format_created_at, format_size, next_sort,
-        notify_reconciled_local_deletions, page_count,
+        DeleteLocalCallbacks, delete_local_capture, deletion_page_status, format_created_at,
+        format_size, next_sort, notify_reconciled_local_deletions, page_count, row_from_entry,
     };
+
+    #[test]
+    fn deletion_launch_failure_never_exposes_capability_or_provider_credentials() {
+        let capability =
+            "https://delete.example/capture?token=fake-delete-token&key=fake-provider-key";
+        let error =
+            std::io::Error::other(format!("browser command failed with argument {capability}"));
+        let detail = deletion_page_status(&Err(error));
+
+        assert!(!detail.is_empty());
+        assert_ne!(detail, deletion_page_status(&Ok(())));
+        assert!(!detail.contains(capability));
+        assert!(!detail.contains("fake-delete-token"));
+        assert!(!detail.contains("fake-provider-key"));
+    }
 
     #[test]
     fn sizes_are_compact_and_readable() {
         assert_eq!(format_size(900), "900 B");
         assert_eq!(format_size(1536), "1.5 KiB");
         assert_eq!(format_size(5 * 1024 * 1024), "5.0 MiB");
+    }
+
+    #[test]
+    fn uploaded_entries_without_an_expiry_show_the_host_retention() {
+        let uploaded = sharer::history::HistoryEntry {
+            id: 1,
+            filename: "capture.png".to_owned(),
+            size_bytes: 1,
+            link: "https://files.example/capture.png".to_owned(),
+            delete_url: String::new(),
+            expires_at: String::new(),
+            local_path: String::new(),
+            created_at: 1,
+        };
+        let local = sharer::history::HistoryEntry {
+            link: String::new(),
+            ..uploaded.clone()
+        };
+
+        assert_eq!(
+            row_from_entry(&uploaded, 0).expires,
+            "Retention set by host"
+        );
+        assert_eq!(row_from_entry(&local, 0).expires, "Local only");
     }
 
     #[test]

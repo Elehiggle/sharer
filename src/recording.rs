@@ -21,14 +21,15 @@ mod webp;
 
 use webp::WebpWriter;
 
-const MAX_RECORDING_BYTES: u64 = 256 * 1024 * 1024;
+const UNEXPECTED_FRAME_SIZE: &str = "screen capture returned an unexpected recording size";
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RecordingSettings {
     pub(super) frames_per_second: u32,
     pub(super) max_seconds: u32,
-    pub(super) capture_resolution: CaptureResolution,
+    pub(super) max_bytes: u64,
     pub(super) format: RecordingFormat,
+    pub(super) capture_resolution: CaptureResolution,
 }
 
 pub(super) struct RecordedCapture {
@@ -47,21 +48,29 @@ pub(super) fn capture_region(
     sharer::validate_recording_seconds(settings.max_seconds)?;
 
     let capturer = RegionCapturer::new_for_recording(region, settings.capture_resolution)?;
+
     match settings.format {
         RecordingFormat::Webp => {
             let output =
                 tempfile::tempfile().context("failed to create a temporary recording file")?;
-            let writer = WebpWriter::new(output, capturer.dimensions(), MAX_RECORDING_BYTES)?;
+            let writer = WebpWriter::new(output, capturer.dimensions(), settings.max_bytes)?;
+
             capture_with_writer(writer, &capturer, stop, filename_stem, settings, now)
         }
+
         RecordingFormat::Mp4 => {
-            let writer = mp4::Mp4Writer::new(capturer.dimensions(), settings.frames_per_second)?;
+            let writer = mp4::Mp4Writer::new(
+                capturer.dimensions(),
+                settings.frames_per_second,
+                settings.max_bytes,
+            )?;
+
             capture_with_writer(writer, &capturer, stop, filename_stem, settings, now)
         }
     }
 }
 
-fn capture_with_writer<W: FrameWriter>(
+fn capture_with_writer<W>(
     writer: W,
     capturer: &RegionCapturer,
     stop: &Receiver<()>,
@@ -70,6 +79,7 @@ fn capture_with_writer<W: FrameWriter>(
     now: fn() -> Instant,
 ) -> Result<RecordedCapture>
 where
+    W: FrameWriter,
     W::Output: std::io::Read + Seek + Send + 'static,
 {
     let animation = record_frames(
@@ -81,9 +91,12 @@ where
             capture: || capturer.capture_rgba(),
         },
     )?;
-    let warning = animation
-        .stopped_at_limit
-        .then(|| "recording stopped at the 256 MiB file limit".to_owned());
+    let warning = animation.stopped_at_limit.then(|| {
+        format!(
+            "recording stopped at the {} GiB file limit",
+            settings.max_bytes / (1024 * 1024 * 1024)
+        )
+    });
 
     let (extension, mime) = match settings.format {
         RecordingFormat::Webp => ("webp", "image/webp"),
@@ -116,11 +129,16 @@ trait FrameWriter {
     type Output;
 
     fn dimensions(&self) -> (u32, u32);
+
     fn add_rgba(&mut self, image: Vec<u8>, timestamp: i32) -> Result<bool>;
+
     fn finish(self, timestamp: i32) -> Result<(Self::Output, u64)>;
 }
 
-impl<W: Write + Seek> FrameWriter for WebpWriter<W> {
+impl<W> FrameWriter for WebpWriter<W>
+where
+    W: Write + Seek,
+{
     type Output = W;
 
     fn dimensions(&self) -> (u32, u32) {
@@ -186,14 +204,14 @@ where
                 .context("recording duration is too long")?
                 .max(elapsed_timestamp),
 
-            None => elapsed_timestamp,
+            None => 0,
         };
         let image = capture().context("failed to capture a recording frame")?;
 
-        anyhow::ensure!(
-            image.len() == frame_bytes,
-            "screen capture returned an unexpected recording size"
-        );
+        anyhow::ensure!(image.len() == frame_bytes, UNEXPECTED_FRAME_SIZE);
+
+        // Each encoder sees one bounded frame. Completed frames live in the temporary
+        // file, so neither encoding nor finalization retains the entire recording.
         if !writer.add_rgba(image, timestamp)? {
             anyhow::ensure!(
                 last_timestamp.is_some(),
@@ -223,12 +241,13 @@ where
         }
     }
 
-    let final_timestamp = duration_timestamp(now().saturating_duration_since(started))?.max(
-        last_timestamp
-            .context("recording produced no frames")?
-            .checked_add(1)
-            .context("recording duration is too long")?,
-    );
+    let final_timestamp =
+        duration_timestamp(now().min(deadline).saturating_duration_since(started))?.max(
+            last_timestamp
+                .context("recording produced no frames")?
+                .checked_add(1)
+                .context("recording duration is too long")?,
+        );
     let (output, length) = writer.finish(final_timestamp)?;
 
     Ok(RecordedAnimation {
@@ -242,7 +261,7 @@ fn encode_frame(dimensions: (u32, u32), image: &[u8]) -> Result<webp_animation::
     // Enforce the bound before the native encoder allocates its canvas and scratch buffers.
     anyhow::ensure!(
         image.len() == recording_frame_bytes(dimensions)?,
-        "screen capture returned an unexpected recording size"
+        UNEXPECTED_FRAME_SIZE
     );
     let options = EncoderOptions {
         encoding_config: Some(EncodingConfig::new_lossy(80.0)),
