@@ -58,6 +58,13 @@ gh attestation verify sharer-windows-x86_64.zip --repo legacy3/sharer
 
 Extract `ShareR.exe` somewhere permanent and launch it. Add that directory to your user `PATH` if you also want the CLI.
 
+Or install from the Scoop bucket in this repository:
+
+```powershell
+scoop bucket add sharer https://github.com/legacy3/sharer
+scoop install sharer/sharer
+```
+
 ### macOS
 
 Extract the archive and move `ShareR.app` to `/Applications`. Until release builds are signed, remove the download quarantine attribute and launch the app with:

@@ -1,0 +1,31 @@
+{
+    "version": "0.1.2",
+    "description": "A lightweight cross-platform capture, clipboard, and file uploader",
+    "homepage": "https://github.com/legacy3/sharer",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/legacy3/sharer/releases/download/v0.1.2/sharer-windows-x86_64.zip",
+            "hash": "294a85c993e7670c4c6365c5e20d82edbc53b13ca1bc38b8412f8aee610fcef7",
+            "extract_dir": "sharer-windows-x86_64"
+        }
+    },
+    "bin": "ShareR.exe",
+    "shortcuts": [
+        [
+            "ShareR.exe",
+            "ShareR"
+        ]
+    ],
+    "checkver": {
+        "github": "https://github.com/legacy3/sharer"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/legacy3/sharer/releases/download/v$version/sharer-windows-x86_64.zip",
+                "extract_dir": "sharer-windows-x86_64"
+            }
+        }
+    }
+}
