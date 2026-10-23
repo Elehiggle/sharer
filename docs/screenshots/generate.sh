@@ -456,7 +456,8 @@ if [[ "$(sqlite3 -cmd '.timeout 1000' "$database" "SELECT json_extract(value, '$
 	exit 1
 fi
 scroll_page 60 4
-scroll_page 4
+# Keep the Recording heading and its complete card in the featured view.
+scroll_page 3
 capture_view settings-recording.png
 click_at 227 88
 if [[ "$(sqlite3 -cmd '.timeout 1000' "$database" "SELECT json_extract(value, '$.settings_mode') FROM settings WHERE key = 'application';")" != simple ]]; then

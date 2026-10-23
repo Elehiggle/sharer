@@ -144,6 +144,8 @@ Without a binary argument, the script permits an automatic build only inside a c
 
 Regenerate the full set whenever a visible UI change lands, then inspect every image independently. A completed generator run establishes that files were produced, not that the design or interactions passed review.
 
+Judge composition as well as containment: related fields need consistent label placement, aligned controls, and deliberate spacing. Readable controls can still form an incoherent layout. Frame a featured section with its heading and complete card whenever it fits; use overlapping views when scrolling is necessary. A composition failure blocks visual acceptance even when builds and interaction checks pass.
+
 ## Image fixtures
 
 The EXIF and HDR fixtures come from [Google libultrahdr](https://github.com/google/libultrahdr) commit `7d51b4cfacb8187ab74c34189db6ebdb895962d8` under [CC BY 4.0](https://github.com/google/libultrahdr/blob/7d51b4cfacb8187ab74c34189db6ebdb895962d8/tests/data/LICENSE).
