@@ -507,11 +507,14 @@ export component CaptureView inherits Rectangle {
                                     height: self.single-row ? Theme.control-height : Theme.control-height * 2 + 8px;
                                     vertical-stretch: 0;
                                     local-copy := FlatButton {
+                                        x: 0px;
+                                        y: 0px;
                                         width: self.preferred-width;
                                         text: "Copy file"; enabled: !root.active-job; primary: root.last-link == ""; icon-source: Icons.copy; has-icon: true; clicked => { root.copy-file(); }
                                     }
                                     local-open := FlatButton {
                                         x: local-copy.width + 8px;
+                                        y: 0px;
                                         width: self.preferred-width;
                                         text: "Open file"; enabled: !root.active-job; clicked => { root.open-local(); }
                                     }
