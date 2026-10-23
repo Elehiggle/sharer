@@ -347,7 +347,7 @@ export component CaptureView inherits Rectangle {
                     }
                     CaptureAction {
                         width: (content.content-width - 24px) / 4;
-                        title: "Record";
+                        title: "Record region";
                         shortcut: root.recording-hotkey;
                         icon-source: Icons.recording;
                         compact: true;
@@ -501,15 +501,26 @@ export component CaptureView inherits Rectangle {
                             if root.last-local-path != "": VerticalLayout {
                                 spacing: 8px;
                                 ArtifactValue { label: "LOCAL FILE"; value: root.last-local-path; }
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: start;
-                                    FlatButton { text: "Copy file"; enabled: !root.active-job; primary: root.last-link == ""; icon-source: Icons.copy; has-icon: true; clicked => { root.copy-file(); } }
-                                    FlatButton { text: "Open file"; enabled: !root.active-job; clicked => { root.open-local(); } }
-                                }
-                                HorizontalLayout {
-                                    alignment: start;
-                                    FlatButton { text: "Show in folder"; enabled: !root.active-job; clicked => { root.reveal-local(); } }
+                                local-actions := Rectangle {
+                                    // Wrap based on the details column and intrinsic button widths.
+                                    property <bool> single-row: self.width >= local-copy.preferred-width + local-open.preferred-width + local-reveal.preferred-width + 16px;
+                                    height: self.single-row ? Theme.control-height : Theme.control-height * 2 + 8px;
+                                    vertical-stretch: 0;
+                                    local-copy := FlatButton {
+                                        width: self.preferred-width;
+                                        text: "Copy file"; enabled: !root.active-job; primary: root.last-link == ""; icon-source: Icons.copy; has-icon: true; clicked => { root.copy-file(); }
+                                    }
+                                    local-open := FlatButton {
+                                        x: local-copy.width + 8px;
+                                        width: self.preferred-width;
+                                        text: "Open file"; enabled: !root.active-job; clicked => { root.open-local(); }
+                                    }
+                                    local-reveal := FlatButton {
+                                        x: local-actions.single-row ? local-open.x + local-open.width + 8px : 0px;
+                                        y: local-actions.single-row ? 0px : Theme.control-height + 8px;
+                                        width: self.preferred-width;
+                                        text: "Show in folder"; enabled: !root.active-job; clicked => { root.reveal-local(); }
+                                    }
                                 }
                                 if root.last-link == "": HorizontalLayout {
                                     spacing: 8px;

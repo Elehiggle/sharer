@@ -192,6 +192,45 @@ component ShortcutCell inherits VerticalLayout {
     }
 }
 
+component RecordingNumberRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> input-label;
+    in property <string> unit;
+    in-out property <int> value;
+    in property <int> minimum;
+    in property <int> maximum;
+    in property <bool> enabled: true;
+
+    height: Theme.control-height;
+    spacing: 8px;
+    cross-axis-alignment: center;
+
+    Text {
+        width: 120px;
+        text: root.label;
+        color: Theme.text-soft;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+    NumberStepper {
+        width: 120px;
+        label: root.input-label;
+        value <=> root.value;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        step-size: 1;
+        enabled: root.enabled;
+    }
+    Text {
+        width: 32px;
+        text: root.unit;
+        color: Theme.text-muted;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+    Rectangle { horizontal-stretch: 1; background: transparent; }
+}
+
 export component SettingsView inherits Rectangle {
     background: transparent;
 
@@ -339,7 +378,7 @@ export component SettingsView inherits Rectangle {
                 }
                 Text {
                     horizontal-stretch: 1;
-                    text: root.settings-dirty && root.narrow ? "Unsaved changes · Save to apply" : (root.advanced-settings ? "All controls. Changes apply when saved." : "Everyday controls. Advanced values stay active.");
+                    text: root.settings-dirty && root.narrow ? "Unsaved changes · Save to apply" : (root.advanced-settings ? "All controls, including recording limits." : "Everyday controls. Advanced values stay active.");
                     color: root.settings-dirty && root.narrow ? Theme.accent : Theme.text-muted;
                     font-size: 12px;
                     wrap: word-wrap;
@@ -609,74 +648,42 @@ export component SettingsView inherits Rectangle {
                             }
                             if !root.advanced-settings: AdvancedSummary {
                                 text: root.recording-fps + " fps · " + (Math.mod(root.recording-max-seconds, 60) == 0 ? root.recording-max-seconds / 60 + " min" : root.recording-max-seconds + " sec") + " · " + root.recording-max-gib + " GiB limit";
-                                detail: root.settings-dirty ? "Recording limits shown are a draft. Save changes to apply them." : "Recording stops at the time or file size limit. These values stay active in Simple mode.";
+                                detail: root.settings-dirty ? "Recording settings shown are a draft. Save changes to apply them." : "Recording stops at the time or file size limit. These values stay active in Simple mode.";
                                 enabled: !root.busy;
                                 edit => { root.show-advanced(); }
                             }
                             if root.advanced-settings: SettingGroup {
-                                label: "Limits";
-                                description: "Stops at this length or the file size limit.";
-                                HorizontalLayout {
-                                    spacing: 24px;
-
-                                    VerticalLayout {
-                                        min-width: 0px;
-                                        preferred-width: 0px;
-                                        horizontal-stretch: 1;
-                                        spacing: 5px;
-                                        Text { text: "Length"; color: Theme.text-muted; font-size: 12px; }
-                                        HorizontalLayout {
-                                            spacing: 8px;
-                                            NumberStepper {
-                                                enabled: !root.busy;
-                                                width: 120px;
-                                                label: "Maximum recording length in seconds";
-                                                value <=> root.recording-max-seconds;
-                                                minimum: 1;
-                                                maximum: 3600;
-                                                step-size: 1;
-                                            }
-                                            Text { text: "sec"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
-                                        }
-                                    }
-                                    VerticalLayout {
-                                        min-width: 0px;
-                                        preferred-width: 0px;
-                                        horizontal-stretch: 1;
-                                        spacing: 5px;
-                                        Text { text: "Frame rate"; color: Theme.text-muted; font-size: 12px; }
-                                        HorizontalLayout {
-                                            spacing: 8px;
-                                            NumberStepper {
-                                                enabled: !root.busy;
-                                                width: 120px;
-                                                label: "Recording frame rate";
-                                                value <=> root.recording-fps;
-                                                minimum: 1;
-                                                maximum: 60;
-                                                step-size: 1;
-                                            }
-                                            Text { text: "fps"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
-                                        }
-                                    }
+                                label: "Recording settings";
+                                description: "Recording stops at the duration or file size limit.";
+                                RecordingNumberRow {
+                                    label: "Max duration";
+                                    input-label: "Maximum recording duration in seconds";
+                                    unit: "sec";
+                                    value <=> root.recording-max-seconds;
+                                    minimum: 1;
+                                    maximum: 3600;
+                                    enabled: !root.busy;
                                 }
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    Text { width: 120px; text: "Max file size"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
-                                    NumberStepper {
-                                        enabled: !root.busy;
-                                        width: 120px;
-                                        label: "Maximum recording file size in GiB";
-                                        value <=> root.recording-max-gib;
-                                        minimum: 1;
-                                        maximum: 3;
-                                        step-size: 1;
-                                    }
-                                    Text { text: "GiB"; color: Theme.text-muted; font-size: 12px; vertical-alignment: center; }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                RecordingNumberRow {
+                                    label: "Frame rate";
+                                    input-label: "Recording frame rate in frames per second";
+                                    unit: "fps";
+                                    value <=> root.recording-fps;
+                                    minimum: 1;
+                                    maximum: 60;
+                                    enabled: !root.busy;
+                                }
+                                RecordingNumberRow {
+                                    label: "Max file size";
+                                    input-label: "Maximum recording file size in GiB";
+                                    unit: "GiB";
+                                    value <=> root.recording-max-gib;
+                                    minimum: 1;
+                                    maximum: 3;
+                                    enabled: !root.busy;
                                 }
                                 Text {
-                                    text: "Recordings stream to disk. The 1–3 GiB limit bounds the file, not memory; animated WebP cannot exceed 4 GiB.";
+                                    text: "Duration: 1–3,600 sec. Frame rate: 1–60 fps. File size: 1–3 GiB.";
                                     color: Theme.text-muted;
                                     font-size: 11.5px;
                                     wrap: word-wrap;
@@ -1034,7 +1041,8 @@ export component SettingsView inherits Rectangle {
                             if root.capture-name-mode == 3: Rectangle { height: 1px; background: Theme.border; }
                             if root.capture-name-mode == 3: SettingRow {
                                 label: "Custom base name";
-                                description: "Characters are sanitized; the extension is added.";
+                                description: "Extension added automatically.";
+                                help: "The base name is cleaned up to make a valid file name.";
                                 CompactField {
                                     field-enabled: !root.busy;
                                     text <=> root.capture-custom-name;

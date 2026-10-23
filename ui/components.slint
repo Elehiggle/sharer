@@ -1100,11 +1100,11 @@ export component NumberStepper inherits Rectangle {
     HorizontalLayout {
         minus := Rectangle {
             width: 28px;
-            background: minus-touch.has-hover && root.value > root.minimum ? Theme.surface-hover : transparent;
+            background: minus-touch.enabled && minus-touch.has-hover ? Theme.surface-hover : transparent;
 
             Text {
                 text: "−";
-                color: root.value > root.minimum ? Theme.text-soft : Theme.text-muted;
+                color: minus-touch.enabled ? Theme.text-soft : Theme.text-muted;
                 font-size: 14px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -1188,11 +1188,11 @@ export component NumberStepper inherits Rectangle {
         Rectangle { width: 1px; background: Theme.border; }
         plus := Rectangle {
             width: 28px;
-            background: plus-touch.has-hover && root.value < root.maximum ? Theme.surface-hover : transparent;
+            background: plus-touch.enabled && plus-touch.has-hover ? Theme.surface-hover : transparent;
 
             Text {
                 text: "+";
-                color: root.value < root.maximum ? Theme.text-soft : Theme.text-muted;
+                color: plus-touch.enabled ? Theme.text-soft : Theme.text-muted;
                 font-size: 14px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -1293,7 +1293,7 @@ export component ChoiceCard inherits Rectangle {
         padding-top: 12px;
         padding-bottom: 12px;
         spacing: 11px;
-        cross-axis-alignment: center;
+        cross-axis-alignment: stretch;
 
         VerticalLayout {
             width: 18px;
@@ -1320,8 +1320,8 @@ export component ChoiceCard inherits Rectangle {
         }
         VerticalLayout {
             horizontal-stretch: 1;
-            vertical-stretch: 0;
-            alignment: center;
+            vertical-stretch: 1;
+            alignment: start;
             spacing: 3px;
 
             Text {
